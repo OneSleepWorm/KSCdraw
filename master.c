@@ -12,9 +12,9 @@ int main(void)
 {
     bus_init();
 
-    console = bus_getdriver("sys", "console");
+    console = bus_getdriver("sys", 0, "console");
 
-    dd_t* tmr = bus_getdriver("tim", "clock");
+    dd_t* tmr = bus_getdriver("tim", 0, "clock");
     if (!tmr) {
         ddioctl(console, "timer driver not found\n");
         return -1;
@@ -29,7 +29,7 @@ int main(void)
     Sleep(500);
     ddioctl(console, "timer stopped\n");
 
-    dd_t* sys = bus_getdriver("sys", "systime");
+    dd_t* sys = bus_getdriver("sys", 0, "systime");
     if (sys) {
         uint32_t t = 0;
         ddread(sys, &t, sizeof(t), 0);

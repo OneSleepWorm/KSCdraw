@@ -56,11 +56,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     }
 }
 
-// 中断服务函数（在 startup 文件中已定义，需实现）
-void TIM2_IRQHandler(void)
-{
-    HAL_TIM_IRQHandler(&htim2);   // 进入HAL库统一中断处理，内部会调用回调
-}
+// (废弃 — 改用 pdrvs/tim_clocktask.c 的 register-level ISR)
+// void TIM2_IRQHandler(void)
+// {
+//     HAL_TIM_IRQHandler(&htim2);
+// }
 
 CTASK_RUN clock_task_run(clock_task_t* task){
     HAL_TIM_Base_Start_IT(&htim2);
