@@ -8,10 +8,6 @@
 #include "KSCimg.h"
 #include "KSCfont.h"
 
-#if __USE_KEY__
-#include "key.h"
-#endif
-
 
 //对象属性定义ksc_obj_t
 typedef struct ksc_obj_t{

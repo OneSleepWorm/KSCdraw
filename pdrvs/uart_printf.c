@@ -33,48 +33,84 @@
  */
 
 #include "../inc/dd.h"
+#include "../inc/KSCOSsystem.h"
 #if __USE_STM32__
 #include <stdio.h>
 #include "main.h"
 
+typedef struct {
+    USART_TypeDef* uart;
+    uint8_t        inst_no;
+} uart_ctx_t;
+
+static int uart_probe(dd_t* dd)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)osmalloc(sizeof(uart_ctx_t));
+    if (!ctx) return -1;
+    ctx->uart = (USART_TypeDef*)dd->dev->private->device_register;
+    ctx->inst_no = dd->dev->private->inst_no;
+    dd->driver_data = ctx;
+    return 0;
+}
+
+static int uart_remove(dd_t* dd)
+{
+    if (dd->driver_data) {
+        osfree(dd->driver_data);
+        dd->driver_data = NULL;
+    }
+    return 0;
+}
+
 static int uart_printf_open(dd_t* dd)
 {
-    (void)dd;
+    uart_ctx_t* ctx = (uart_ctx_t*)dd->driver_data;
 
-    RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_USART1EN;
+    if (ctx->inst_no == 1) {
+        RCC->APB2ENR |= RCC_APB2ENR_USART1EN | RCC_APB2ENR_IOPAEN;
+        GPIOA->CRH = (GPIOA->CRH & ~(0xFF << 4)) | (0xB << 4) | (0x4 << 8);
+    } else if (ctx->inst_no == 2) {
+        RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+        RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
+        GPIOA->CRL = (GPIOA->CRL & ~(0xFF << 8)) | (0xB << 8) | (0x4 << 12);
+    } else if (ctx->inst_no == 3) {
+        RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
+        RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+        GPIOB->CRH = (GPIOB->CRH & ~(0xFF << 4)) | (0xB << 4) | (0x4 << 8);
+    }
     (void)RCC->APB2ENR;
 
-    GPIOA->CRH = (GPIOA->CRH & ~(0xF << 4)) | (0xB << 4);
-    GPIOA->CRH = (GPIOA->CRH & ~(0xF << 8)) | (0x4 << 8);
-
-    USART1->BRR = 625;
-    USART1->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
+    uint16_t brr = (ctx->inst_no == 1) ? 625 : 312;
+    ctx->uart->BRR = brr;
+    ctx->uart->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
 
     return 0;
 }
 
 static int uart_printf_close(dd_t* dd)
 {
-    (void)dd;
-    USART1->CR1 &= ~USART_CR1_UE;
+    uart_ctx_t* ctx = (uart_ctx_t*)dd->driver_data;
+    if (!ctx) return -1;
+    ctx->uart->CR1 &= ~USART_CR1_UE;
     return 0;
 }
 
 static int uart_printf_write(dd_t* dd, void* data, uint32_t size, uint32_t mode)
 {
-    (void)dd; (void)mode;
+    (void)mode;
+    uart_ctx_t* ctx = (uart_ctx_t*)dd->driver_data;
     uint8_t* p = (uint8_t*)data;
     for (uint32_t i = 0; i < size; i++)
     {
-        while (!(USART1->SR & USART_SR_TXE));
-        USART1->DR = p[i];
+        while (!(ctx->uart->SR & USART_SR_TXE));
+        ctx->uart->DR = p[i];
     }
     return (int)size;
 }
 
 static int uart_printf_ioctl(dd_t* dd, const char* fmt, va_list ap)
 {
-    (void)dd;
+    uart_ctx_t* ctx = (uart_ctx_t*)dd->driver_data;
     char buf[256];
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n > 0)
@@ -82,14 +118,19 @@ static int uart_printf_ioctl(dd_t* dd, const char* fmt, va_list ap)
         size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
         for (size_t i = 0; i < len; i++)
         {
-            while (!(USART1->SR & USART_SR_TXE));
-            USART1->DR = (uint8_t)buf[i];
+            while (!(ctx->uart->SR & USART_SR_TXE));
+            ctx->uart->DR = (uint8_t)buf[i];
         }
     }
     return n;
 }
 
-static const driver_ops_t uart_printf_ops = {
+static const pdrv_sysfunc_t uart_sysfunc = {
+    .probe = uart_probe,
+    .remove = uart_remove,
+};
+
+static const pdrv_ops_t uart_printf_ops = {
     .ops_name = "printf",
     .open = uart_printf_open,
     .close = uart_printf_close,
@@ -97,6 +138,6 @@ static const driver_ops_t uart_printf_ops = {
     .ioctl = uart_printf_ioctl,
 };
 
-REGISTER_DRIVER("uart_printf", &uart_printf_ops);
+REGISTER_DRIVER("uart_printf", &uart_sysfunc, &uart_printf_ops, "UART printf output");
 
 #endif

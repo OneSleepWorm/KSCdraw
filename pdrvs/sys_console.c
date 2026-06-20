@@ -57,12 +57,12 @@ static int console_ioctl(dd_t* dd, const char* fmt, va_list ap)
     return n;
 }
 
-static const driver_ops_t console_ops = {
+static const pdrv_ops_t console_ops = {
     .ops_name = "console",
     .ioctl = console_ioctl,
 };
 
-REGISTER_DRIVER("sys_console", &console_ops);
+REGISTER_DRIVER("sys_console", NULL, &console_ops, "Console I/O");
 
 #endif
 

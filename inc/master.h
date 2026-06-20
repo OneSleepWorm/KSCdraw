@@ -10,15 +10,7 @@
 #include "KSCconfig.h"
 #include "application.h"
 #include "KSCOSsystem.h"
-#include "input.h"
-#include "key.h"
 #include "dd.h"
-
-#include "clocktask.h"
-#if __USE_KEY__
-#include "key.h"
-
-#endif
 
 // #include "SDL3/SDL.h"
 #endif

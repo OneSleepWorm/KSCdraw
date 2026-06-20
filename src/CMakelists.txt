@@ -4,9 +4,6 @@ add_library(KSCDRAW_SRC
                         KSCfont.c
                         KSCimg.c
                         KSCOSsystem.c
-                        clocktask.c
-                        key.c
-                        input.c
                         dd.c
 )
 set_source_files_properties(KSCdisplay.c key.c PROPERTIES LANGUAGE CXX)

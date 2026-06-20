@@ -23,33 +23,34 @@
  * ============================================================
  *
  * ┌─────────────────────────────────────────────────────────┐
- * │  第2层: pdrv_t (驱动)                                    │
- * │  作用: 描述一类驱动程序的能力                             │
- * │  内容: 驱动名 + 单个 ops 操作集                           │
- * │  注册: REGISTER_DRIVER(...) → 编入 pdrv_table 段        │
- * │  命名: 设备前缀_功能名, 如 tim_clocktask / sys_systime    │
+ * │  第1层: pdev_t (设备)                                    │
+ * │  作用: 描述硬件外设实例                                   │
+ * │  内容: base(类型名) + private(寄存器基址/实例号/父设备)    │
+ * │  注册: REGISTER_DEVICE(type, inst, reg) → pdev_table 段  │
+ * │  命名: type 如 "tim", "spi", "uart"                      │
  * │                                                         │
  * │  第2层: pdrv_t (驱动)                                    │
  * │  作用: 描述一类驱动程序的能力                             │
- * │  内容: 驱动名 + dd_ops[] 操作集数组                       │
- * │  注册: REGISTER_DRIVER(...) → 编入 pdrv_table 段        │
+ * │  内容: 驱动名 + sysfunc(probe/remove) + ops + 描述       │
+ * │  注册: REGISTER_DRIVER(name, sysfunc, ops, desc)         │
  * │  命名: 设备前缀_功能名, 如 tim_clocktask / sys_systime    │
  * │                                                         │
  * │  第3层: dd_t (设备描述符)                                │
  * │  作用: 用户与驱动交互的运行时句柄                          │
  * │  内容: dd_ops(操作集) + callback + driver_data + user_data│
- * │  获取: bus_getdriver(dev_name, ops_name) → dd_t*        │
+ * │  获取: bus_getdriver(dev_name, dev_no, ops_name) → dd_t*│
  * └─────────────────────────────────────────────────────────┘
  *
  *
  * ============================================================
  * 三、匹配规则（三步前缀匹配）
  * ============================================================
- * bus_getdriver(device_name, driver_ops_name) 执行:
+ * bus_getdriver(device_name, dev_no, driver_ops_name) 执行:
  *
- *   第1步: 遍历设备表, 找 device_name 前缀匹配的设备
- *          例: "tim" → 匹配 "tim1", "tim2", "tim3", "tim4"
- *          总是匹配最后一个(若同一个前缀有多个, 取最后注册的)
+ *   第1步: 遍历设备表, 精确匹配 device_name == dev->base->device_name
+ *          例: "tim" → 匹配所有 base->device_name=="tim" 的设备
+ *          若 dev_no != 0, 额外匹配 dev->private->inst_no
+ *          例: "tim" + dev_no=1 → 精确匹配实例号 1
  *
  *   第2步: 遍历驱动表, 找 device_name 前缀匹配的驱动
  *          例: "tim" → 匹配 "tim_clocktask"
@@ -68,7 +69,8 @@
  * ============================================================
  * 四、命名规范
  * ============================================================
- * 设备名   →  type + 实例号          如 "tim1", "sys0"
+ * 设备名   →  type (单独)           如 "tim", "sys"
+ * 实例号   →  inst_no (单独)        如 1, 0
  * 驱动名   →  设备前缀_功能          如 "tim_clocktask"
  * ops_name →  具体功能名             如 "clock", "systime"
  *
@@ -87,8 +89,8 @@
  *   bus_init();
  *
  *   // 2. 获取设备描述符
- *   dd_t* tmr = bus_getdriver("tim", "clock");
- *   //         ↑ 设备前缀     ↑ ops_name
+ *   dd_t* tmr = bus_getdriver("tim", 0, "clock");
+ *   //         ↑ 设备前缀  ↑设备号  ↑ ops_name
  *
  *   // 3. 配置参数
  *   tmr->user_data = (void*)(uintptr_t)500;  // 500ms
@@ -112,12 +114,10 @@
  * 六、注意事项
  * ============================================================
  *
- * 1. pdrv_t 对齐
- *    pdrv_t 的 sizeof(=16) 是 2 的幂，与 aligned(16) 一致，
- *    链接器在 section 中以 sizeof 为单位连续排布，stride = sizeof，
- *    section 字节数可精确用于计数。
- *
- *    pdev_t 同理，sizeof(=16) 也是 2 的幂，无需特殊处理。
+ * 1. pdrv_t / pdev_t 对齐
+ *    pdrv_t sizeof(=16) aligned(16)，4 指针。
+ *    pdev_t sizeof(=8)  aligned(8)， 2 指针。
+ *    均为 2 的幂，section 按 sizeof 连续排布，stride = sizeof。
  *
  * 2. 静态库链接丢弃问题
  *    若一个 .c 文件只包含 REGISTER_DEVICE / REGISTER_DRIVER 而
@@ -127,10 +127,11 @@
  *    add_library(...). 参见 timer.c / device.c 在 CMakeLists.txt
  *    中的位置.
  *
- * 3. device_name 不带设备号
- *    用户调用 bus_getdriver 时通常只需指定设备前缀, 如 "tim"
- *    而非 "tim1". 前缀匹配会自动选中该前缀的最后一个设备.
- *    若确实需要特指某个实例, 可传入全名如 "tim2".
+ * 3. 设备号指定
+ *    bus_getdriver 第三个参数为设备号, 0 表示不指定(前缀匹配第一个),
+ *    非 0 则精确匹配该号对应的设备实例. 例如:
+ *      bus_getdriver("tim", 1, "clock") → 精确匹配 tim1
+ *      bus_getdriver("tim", 0, "clock") → 匹配第一个 tim 前缀设备
  *
  * 4. dd_t 生命周期
  *    bus_getdriver 每次返回新分配的 dd_t, 目前总线不负责回收.
@@ -140,31 +141,45 @@
  * 5. callback 与 driver_data / user_data 的约定
  *    - callback: 由驱动在特定事件(如定时器到期)时调用, 参数为
  *                user_data
- *    - driver_data: 由驱动的 open/close 管理, 用户不应直接修改
+ *    - driver_data: 由驱动的 probe 预分配, close 释放, 用户不应直接修改
  *    - user_data: 由用户在 ddopen 前配置, 驱动在 open 时读取
+ 
+ * 6. probe 回调
+ *    bus_getdriver 匹配成功后自动调用 drv->sysfunc->probe(dd),
+ *    用于预分配 driver_data。probe 为 NULL 则跳过。
+ *    
+ * 7. dd_t.dev 指针
+ *    匹配到的 pdev_t 通过 dd->dev 传递给驱动,
+ *    驱动可访问 dev->private->device_register / inst_no 等设备信息。
  *
  * ============================================================
  * 七、完整注册示例
  * ============================================================
  *
  *   // === 设备注册 (device.c) ===
- *   REGISTER_DEVICE("tim1");
+ *   REGISTER_DEVICE("tim", 1, TIM2_BASE);
  *
  *   // === 驱动注册 (timer.c) ===
- *   static int timer_open(dd_t* dd) { ... }
- *   static int timer_close(dd_t* dd) { ... }
- *   static int timer_read(dd_t* dd, void* data, uint32_t size, ...) { ... }
- *
- *   static driver_ops_t timer_ops = {
+ *   static int timer_probe(dd_t* dd) {
+ *       timer_ctx_t* ctx = osmalloc(sizeof(timer_ctx_t));
+ *       if(!ctx) return -1;
+ *       ctx->reg_base = dd->dev->private->device_register;
+ *       dd->driver_data = ctx;
+ *       return 0;
+ *   }
+ *   static const pdrv_sysfunc_t timer_sysfunc = {
+ *       .probe = timer_probe,
+ *   };
+ *   static pdrv_ops_t timer_ops = {
  *       .ops_name = "clock",
  *       .open = timer_open,
  *       .close = timer_close,
  *       .read = timer_read,
  *   };
- *   REGISTER_DRIVER("tim_clocktask", &timer_ops);
+ *   REGISTER_DRIVER("tim_clocktask", &timer_sysfunc, &timer_ops, "TIM clock");
  *
  *   // === 用户使用 ===
- *   dd_t* tmr = bus_getdriver("tim", "clock");
+ *   dd_t* tmr = bus_getdriver("tim", 0, "clock");
  *   tmr->user_data = (void*)(uintptr_t)500;
  *   tmr->callback = my_callback;
  *   ddopen(tmr);
@@ -185,13 +200,19 @@ typedef struct pdev_base_t{
     const char* device_name;
 } pdev_base_t;
 
+typedef struct pdev_private_t{
+    struct pdev_t* parent;
+    uint32_t device_register;
+    uint8_t inst_no;
+} pdev_private_t;
+
 /**
  * @brief 设备完整结构
- * @note  包含基类 + 总线匹配到的驱动指针
+ * @note  2 个指针，8 字节 (32-bit)，对齐 8
  */
 typedef struct __attribute__((aligned(8))) pdev_t {
-    pdev_base_t base;
-    pdrv_t* driver;      // 由 bus_init 填充
+    const pdev_base_t* base;
+    const pdev_private_t* private;
 }pdev_t;
 
 /**
@@ -215,7 +236,19 @@ typedef struct pdrv_base_t{
     const char* driver_name;
 } pdrv_base_t;
 
-typedef struct driver_ops_t driver_ops_t;
+typedef struct pdrv_ops_t pdrv_ops_t;
+typedef struct dd_t dd_t;
+typedef int (*driver_probe_func)(dd_t* dd);
+typedef int (*driver_remove_func)(dd_t* dd);
+
+/**
+ * @brief 驱动系统函数
+ * @note  用于设备初始化与注销, 由总线调用，一般实现为预堆分配driver_data空间与释放
+ */
+typedef struct pdrv_sysfunc_t{
+    driver_probe_func probe;
+    driver_remove_func remove;
+} pdrv_sysfunc_t;
 
 /**
  * @brief 驱动完整结构
@@ -224,11 +257,11 @@ typedef struct driver_ops_t driver_ops_t;
  *        确保链接器在 section 中按 sizeof 为单位连续排布
  */
 typedef struct __attribute__((aligned(16))) pdrv_t {
-    pdrv_base_t base;
-    const driver_ops_t* ops;            // 指向单个 ops
+    const pdrv_base_t* base;
+    const pdrv_sysfunc_t* sysfunc;
+    const pdrv_ops_t* ops;
+    const char* driver_desc;
 } pdrv_t;
-
-typedef struct dd_t dd_t;
 
 /**
  * @brief 通用回调函数类型
@@ -240,13 +273,17 @@ typedef void* (*void_func_t)(void* data);
  * @brief 设备描述符 ( Device Descriptor )
  * @note  用户与驱动交互的核心句柄, 由 bus_getdriver 创建并返回
  * 
- *        dd_ops      — 指向某个 driver_ops_t, 决定 open/close/read/write/ioctl 的实现
+ *        dev         — 匹配到的 pdev_t, 驱动访问设备寄存器/实例号
+ *        driver      — 匹配到的 pdrv_t
+ *        dd_ops      — 指向某个 pdrv_ops_t, 决定 open/close/read/write/ioctl
  *        callback    — 异步回调 (如定时器到期), 参数为 user_data
- *        driver_data — 驱动内部状态, 由 open/close 管理, 用户不应直接修改
- *        user_data   — 用户自定义参数, 在 ddopen 前设置, 驱动在 open 时读取
+ *        driver_data — 由 probe 预分配, close 释放
+ *        user_data   — 用户自定义参数, 在 ddopen 前设置
  */
 typedef struct dd_t{
-    const driver_ops_t* dd_ops;
+    const pdev_t* dev;
+    const pdrv_t* driver;
+    const pdrv_ops_t* dd_ops;
     void_func_t callback;
     void* driver_data;
     void* user_data;
@@ -254,8 +291,8 @@ typedef struct dd_t{
 
 typedef int (*driver_open_func)(struct dd_t* dd);
 typedef int (*driver_close_func)(struct dd_t* dd);
-typedef int (*driver_read_func)(struct dd_t* dd, void* data, uint32_t count, uint32_t kreigster);
-typedef int (*driver_write_func)(struct dd_t* dd, void* data, uint32_t count, uint32_t kreigster);
+typedef int (*driver_read_func)(struct dd_t* dd, void* data, uint32_t count, uint32_t mode);
+typedef int (*driver_write_func)(struct dd_t* dd, void* data, uint32_t count, uint32_t mode);
 typedef int (*driver_ioctl_func)(struct dd_t* dd, const char* fmt, va_list ap);
 
 /**
@@ -263,105 +300,110 @@ typedef int (*driver_ioctl_func)(struct dd_t* dd, const char* fmt, va_list ap);
  * @note  每个操作集有独立 ops_name, 同一驱动可包含多个操作集
  *        (例如一个驱动同时提供 clock 和 pwm 两种操作)
  */
-typedef struct driver_ops_t{
+typedef struct pdrv_ops_t{
     const char* ops_name;       // 操作集名称, 用于 bus_getdriver 匹配
     driver_open_func open;
     driver_close_func close;
     driver_read_func read;
     driver_write_func write;
     driver_ioctl_func ioctl;
-} driver_ops_t;
+} pdrv_ops_t;
 
 
 #if __USE_PC__
 
-// 辅助宏：用于展开 __COUNTER__ 后再进行拼接
 #define _CONCAT_IMPL(a, b) a##b
 #define _CONCAT(a, b)      _CONCAT_IMPL(a, b)
 
 /**
  * @brief 静态注册设备
- * @param devname  设备名字符串 (如 "tim1", "sys0")
- * @note  生成的结构体被编入 "pdev_table" 链接段, bus_init 时拷贝到总线
- *        必须确保该 .c 文件不被链接器丢弃 (参见静态库注意事项)
- *        所有 REGISTER_DEVICE 调用集中放在 device.c 中
+ * @param type  设备类型名 (如 "tim", "spi", "uart")
+ * @param inst  实例号 (0=无实例)
+ * @param reg   寄存器基地址 (无硬件传 0)
+ * @note  展开为 pdev_base_t + pdev_private_t + pdev_t 三个静态对象，
+ *        编入 "pdev_table" 链接段
  */
-#define REGISTER_DEVICE(devname) \
-    static const pdev_t _CONCAT(_DEV_, __COUNTER__) \
-    __attribute__((section("pdev_table"), used, aligned(8))) = \
-    {{devname}, NULL}
+#define _REGISTER_DEVICE_IMPL(type, inst, reg, ctr) \
+    static const pdev_base_t _CONCAT(_B_, ctr) = {type}; \
+    static const pdev_private_t _CONCAT(_P_, ctr) = { \
+        .parent = NULL, \
+        .device_register = (uint32_t)(reg), \
+        .inst_no = (uint8_t)(inst) \
+    }; \
+    static const pdev_t _CONCAT(_D_, ctr) \
+    __attribute__((section("pdev_table"), used)) = { \
+        &_CONCAT(_B_, ctr), \
+        &_CONCAT(_P_, ctr) \
+    };
 
-/**
- * @brief 静态注册驱动
- * @param drvname  驱动名字符串 (如 "tim_clocktask", "sys_systime")
- * @param ops_ptr  驱动操作集指针 (driver_ops_t*)
- * @note  生成的结构体被编入 "pdrv_table" 链接段, bus_init 时拷贝到总线
- *        必须确保该 .c 文件不被链接器丢弃 (参见静态库注意事项)
- *        驱动通常注册在其实现文件(如 timer.c)中
- *        用法示例:
- *          static const driver_ops_t my_ops = { .ops_name = "...", ... };
- *          REGISTER_DRIVER("tim_clocktask", &my_ops);
- */
-#define REGISTER_DRIVER(drvname, ops_ptr) \
-    static const pdrv_t _CONCAT(_DRV_, __COUNTER__) \
-    __attribute__((section("pdrv_table"), used, aligned(16))) = \
-    {{drvname}, ops_ptr}
+#define REGISTER_DEVICE(type, inst, reg) \
+    _REGISTER_DEVICE_IMPL(type, inst, reg, __COUNTER__)
 
-// 链接器自动生成的段边界符号 (由 __attribute__((section)) 配合 ld 产生)
-extern const pdev_t __start_pdev_table[] __attribute__((aligned(8)));
+#define _REGISTER_DRIVER_IMPL(drvname, sysfunc_ptr, ops_ptr, desc, ctr) \
+    static const pdrv_base_t _CONCAT(_DRV_BASE_, ctr) = {drvname}; \
+    static const pdrv_t _CONCAT(_DRV_, ctr) \
+    __attribute__((section("pdrv_table"), used)) = { \
+        &_CONCAT(_DRV_BASE_, ctr), \
+        sysfunc_ptr, \
+        ops_ptr, \
+        desc \
+    };
+
+#define REGISTER_DRIVER(drvname, sysfunc_ptr, ops_ptr, desc) \
+    _REGISTER_DRIVER_IMPL(drvname, sysfunc_ptr, ops_ptr, desc, __COUNTER__)
+
+extern const pdev_t __start_pdev_table[];
 extern const pdev_t __stop_pdev_table[];
 
-extern const pdrv_t __start_pdrv_table[] __attribute__((aligned(16)));
+extern const pdrv_t __start_pdrv_table[];
 extern const pdrv_t __stop_pdrv_table[];
 #else // __USE_STM32__
 
-// 辅助宏：用于展开 __COUNTER__ 后再进行拼接
 #define _CONCAT_IMPL(a, b) a##b
 #define _CONCAT(a, b)      _CONCAT_IMPL(a, b)
 
-/**
- * @brief 静态注册设备
- * @param devname  设备名字符串 (如 "tim1", "sys0")
- * @note  生成的结构体被编入 "pdev_table" 链接段, bus_init 时拷贝到总线
- *        必须确保该 .c 文件不被链接器丢弃 (参见静态库注意事项)
- *        所有 REGISTER_DEVICE 调用集中放在 device.c 中
- */
-#define REGISTER_DEVICE(devname) \
-    static const pdev_t _CONCAT(_DEV_, __COUNTER__) \
-    __attribute__((section("pdev_table"), used, aligned(8))) = \
-    {{devname}, NULL}
+#define _REGISTER_DEVICE_IMPL(type, inst, reg, ctr) \
+    static const pdev_base_t _CONCAT(_B_, ctr) = {type}; \
+    static const pdev_private_t _CONCAT(_P_, ctr) = { \
+        .parent = NULL, \
+        .device_register = (uint32_t)(reg), \
+        .inst_no = (uint8_t)(inst) \
+    }; \
+    static const pdev_t _CONCAT(_D_, ctr) \
+    __attribute__((section("pdev_table"), used)) = { \
+        &_CONCAT(_B_, ctr), \
+        &_CONCAT(_P_, ctr) \
+    };
 
-/**
- * @brief 静态注册驱动
- * @param drvname  驱动名字符串 (如 "tim_clocktask", "sys_systime")
- * @param ops_ptr  驱动操作集指针 (driver_ops_t*)
- * @note  生成的结构体被编入 "pdrv_table" 链接段, bus_init 时拷贝到总线
- *        必须确保该 .c 文件不被链接器丢弃 (参见静态库注意事项)
- *        驱动通常注册在其实现文件(如 timer.c)中
- *        用法示例:
- *          static const driver_ops_t my_ops = { .ops_name = "...", ... };
- *          REGISTER_DRIVER("tim_clocktask", &my_ops);
- */
-#define REGISTER_DRIVER(drvname, ops_ptr) \
-    static const pdrv_t _CONCAT(_DRV_, __COUNTER__) \
-    __attribute__((section("pdrv_table"), used, aligned(16))) = \
-    {{drvname}, ops_ptr}
+#define REGISTER_DEVICE(type, inst, reg) \
+    _REGISTER_DEVICE_IMPL(type, inst, reg, __COUNTER__)
 
-// 链接器自动生成的段边界符号 (由 __attribute__((section)) 配合 ld 产生)
-extern const pdev_t __start_pdev_table[] __attribute__((aligned(8)));
+#define _REGISTER_DRIVER_IMPL(drvname, sysfunc_ptr, ops_ptr, desc, ctr) \
+    static const pdrv_base_t _CONCAT(_DRV_BASE_, ctr) = {drvname}; \
+    static const pdrv_t _CONCAT(_DRV_, ctr) \
+    __attribute__((section("pdrv_table"), used)) = { \
+        &_CONCAT(_DRV_BASE_, ctr), \
+        sysfunc_ptr, \
+        ops_ptr, \
+        desc \
+    };
+
+#define REGISTER_DRIVER(drvname, sysfunc_ptr, ops_ptr, desc) \
+    _REGISTER_DRIVER_IMPL(drvname, sysfunc_ptr, ops_ptr, desc, __COUNTER__)
+
+extern const pdev_t __start_pdev_table[];
 extern const pdev_t __stop_pdev_table[];
 
-extern const pdrv_t __start_pdrv_table[] __attribute__((aligned(16)));
+extern const pdrv_t __start_pdrv_table[];
 extern const pdrv_t __stop_pdrv_table[];
 
-// 编译时校验结构体尺寸符合段布局预期
-_Static_assert(sizeof(pdev_t) == 8, "pdev_t must be 8 bytes");
-_Static_assert(sizeof(pdrv_t) == 16, "pdrv_t must be 16 bytes");
+_Static_assert(sizeof(pdev_t) == 8, "pdev_t must be 8 bytes (2 pointers)");
 _Static_assert(__alignof__(pdev_t) == 8, "pdev_t alignment must be 8");
+_Static_assert(sizeof(pdrv_t) == 16, "pdrv_t must be 16 bytes (2 pointers + padding)");
 _Static_assert(__alignof__(pdrv_t) == 16, "pdrv_t alignment must be 16");
 #endif // __USE_STM32__
 int null_func(struct dd_t* dev);  
-int null_rw_func(struct dd_t* dev, void* data, uint32_t size, uint32_t kreigster);
+int null_rw_func(struct dd_t* dev, void* data, uint32_t size, uint32_t mode);
 int null_ioctl_func(struct dd_t* dev, const char* fmt, va_list ap);
 void* null_callback(void* data);
 
@@ -375,12 +417,12 @@ void* null_callback(void* data);
 #define USER_DATA_NULL_FUNC NULL
 
 int bus_init(void);
-dd_t* bus_getdriver(char* device_name, char* driver_ops_name);
+dd_t* bus_getdriver(char* device_name, uint8_t dev_no, char* driver_ops_name);
 
 int ddopen(dd_t* dd);
 int ddclose(dd_t* dd);
-int ddread(dd_t* dd, void* data, uint32_t size, uint32_t kreigster);
-int ddwrite(dd_t* dd, void* data, uint32_t size, uint32_t kreigster);
+int ddread(dd_t* dd, void* data, uint32_t size, uint32_t mode);
+int ddwrite(dd_t* dd, void* data, uint32_t size, uint32_t mode);
 
 int ddioctl(dd_t* dd, const char* fmt, ...);
 

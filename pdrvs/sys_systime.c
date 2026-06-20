@@ -40,7 +40,7 @@ static int systime_write(dd_t* dd, void* data, uint32_t count, uint32_t kreighte
     return 0;
 }
 
-static const driver_ops_t sys_drv_ops0 = {
+static const pdrv_ops_t sys_drv_ops0 = {
     .ops_name = "systime",
     .open = OPEN_NULL_FUNC,
     .close = CLOSE_NULL_FUNC,
@@ -48,4 +48,4 @@ static const driver_ops_t sys_drv_ops0 = {
     .read = systime_read,
     .ioctl = IOCTL_NULL_FUNC,
 };
-REGISTER_DRIVER("sys_systime", &sys_drv_ops0);
+REGISTER_DRIVER("sys_systime", NULL, &sys_drv_ops0, "System time");

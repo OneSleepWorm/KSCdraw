@@ -55,14 +55,18 @@ static uint32_t key_scan(void)
     return key;
 }
 
-static int keypad_open(dd_t* dd)
+static int keypad_probe(dd_t* dd)
 {
-    (void)dd;
     keypad_ctx_t* ctx = (keypad_ctx_t*)osmalloc(sizeof(keypad_ctx_t));
     if (!ctx) return -1;
     ctx->head = 0; ctx->tail = 0; ctx->count = 0;
     dd->driver_data = ctx;
+    return 0;
+}
 
+static int keypad_open(dd_t* dd)
+{
+    (void)dd;
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
 
     GPIOA->CRL = 0x88881111;
@@ -103,12 +107,20 @@ static int keypad_read(dd_t* dd, void* data, uint32_t size, uint32_t kreigster)
 
 static int keypad_close(dd_t* dd)
 {
-    osfree(dd->driver_data);
-    dd->driver_data = NULL;
+    (void)dd;
     return 0;
 }
 
-static const driver_ops_t keypad_ops = {
+static int keypad_remove(dd_t* dd)
+{
+    if (dd->driver_data) {
+        osfree(dd->driver_data);
+        dd->driver_data = NULL;
+    }
+    return 0;
+}
+
+static const pdrv_ops_t keypad_ops = {
     .ops_name = "keypad",
     .open   = keypad_open,
     .close  = keypad_close,
@@ -116,6 +128,11 @@ static const driver_ops_t keypad_ops = {
     .read   = keypad_read,
 };
 
-REGISTER_DRIVER("gpio_keypad", &keypad_ops);
+static const pdrv_sysfunc_t keypad_sysfunc = {
+    .probe = keypad_probe,
+    .remove = keypad_remove,
+};
+
+REGISTER_DRIVER("gpio_keypad", &keypad_sysfunc, &keypad_ops, "4x4 matrix keypad");
 
 #endif
