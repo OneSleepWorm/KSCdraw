@@ -59,11 +59,6 @@ static int timer_open(dd_t* dd) {
     if (!dd->user_data) dd->user_data = (void*)(uintptr_t)1000;
 
     timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
-    if (!ctx) {
-        ctx = (timer_ctx_t*)osmalloc(sizeof(timer_ctx_t));
-        if (!ctx) return -1;
-        dd->driver_data = ctx;
-    }
     ctx->running = 1;
     pthread_create(&ctx->thread, NULL, timer_loop, dd);
     pthread_detach(ctx->thread);
@@ -84,13 +79,12 @@ static int timer_read(dd_t* dd, void* data, uint32_t size, uint32_t mode) {
 }
 
 static const pdrv_ops_t timer_ops = {
-    .ops_name = "clock",
     .open = timer_open,
     .close = timer_close,
     .read = timer_read,
 };
 
-REGISTER_DRIVER("tim_clocktask", NULL, &timer_ops, "TIM clock (PC)");
+REGISTER_DRIVER("tim_clocktask", NULL, NULL, &timer_ops, "TIM clock (PC)");
 
 #endif
 #if __USE_STM32__
@@ -99,59 +93,48 @@ REGISTER_DRIVER("tim_clocktask", NULL, &timer_ops, "TIM clock (PC)");
 static dd_t* tim_owners[4];
 
 typedef struct {
-    TIM_TypeDef*  tim;
-    IRQn_Type     irqn;
-    uint8_t       inst_no;
     volatile uint8_t running;
     uint16_t         period_ms;
 } timer_ctx_t;
 
-static void timer_enable_rcc(uint8_t inst_no)
+static int reg_to_inst(uint32_t reg_base)
 {
-    switch (inst_no) {
-        case 1: RCC->APB2ENR |= RCC_APB2ENR_TIM1EN; break;
-        case 2: RCC->APB1ENR |= RCC_APB1ENR_TIM2EN; break;
-        case 3: RCC->APB1ENR |= RCC_APB1ENR_TIM3EN; break;
-        case 4: RCC->APB1ENR |= RCC_APB1ENR_TIM4EN; break;
+    switch (reg_base) {
+        case 0x40012C00: return 1;
+        case 0x40000000: return 2;
+        case 0x40000400: return 3;
+        case 0x40000800: return 4;
+        default:         return 0;
     }
-    (void)RCC->APB2ENR;
-}
-
-static int timer_probe(dd_t* dd)
-{
-    timer_ctx_t* ctx = (timer_ctx_t*)osmalloc(sizeof(timer_ctx_t));
-    if (!ctx) return -1;
-    ctx->tim = (TIM_TypeDef*)dd->dev->private->device_register;
-    ctx->inst_no = dd->dev->private->inst_no;
-    ctx->running = 0;
-    ctx->period_ms = 1000;
-    dd->driver_data = ctx;
-    return 0;
 }
 
 static int timer_open(dd_t* dd)
 {
     if (!dd->callback) return -1;
     timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
+    if (ctx->period_ms == 0) ctx->period_ms = 1000;
+
+    uint32_t reg_base = dd->dev0->private->device_register;
+    TIM_TypeDef* tim = (TIM_TypeDef*)reg_base;
+    int inst_no = reg_to_inst(reg_base);
 
     static const IRQn_Type irq_map[] = {
         TIM1_UP_IRQn, TIM2_IRQn, TIM3_IRQn, TIM4_IRQn,
     };
-    ctx->irqn = irq_map[ctx->inst_no - 1];
+    IRQn_Type irqn = irq_map[inst_no - 1];
 
-    timer_enable_rcc(ctx->inst_no);
-    tim_owners[ctx->inst_no - 1] = dd;
+    tim_owners[inst_no - 1] = dd;
 
     uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
     uint32_t arr = 10 * ctx->period_ms - 1;
-    ctx->tim->PSC = (uint16_t)psc;
-    ctx->tim->ARR = (uint16_t)arr;
-    ctx->tim->EGR |= TIM_EGR_UG;
-    ctx->tim->CNT = 0;
-    ctx->tim->SR = ~TIM_SR_UIF;
+    tim->PSC = (uint16_t)psc;
+    tim->ARR = (uint16_t)arr;
+    tim->EGR |= TIM_EGR_UG;
+    tim->CNT = 0;
+    tim->SR = ~TIM_SR_UIF;
 
-    NVIC_SetPriority(ctx->irqn, 0);
-    NVIC_EnableIRQ(ctx->irqn);
+    NVIC_SetPriority(irqn, 0);
+    NVIC_EnableIRQ(irqn);
     return 0;
 }
 
@@ -159,25 +142,26 @@ static int timer_write(dd_t* dd, void* data, uint32_t count, uint32_t mode)
 {
     (void)data;
     timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
+    TIM_TypeDef* tim = (TIM_TypeDef*)dd->dev0->private->device_register;
 
     if (mode == 0) {
         ctx->period_ms = (uint16_t)count;
         uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
         uint32_t arr = 10 * ctx->period_ms - 1;
-        ctx->tim->PSC = (uint16_t)psc;
-        ctx->tim->ARR = (uint16_t)arr;
-        ctx->tim->EGR |= TIM_EGR_UG;
+        tim->PSC = (uint16_t)psc;
+        tim->ARR = (uint16_t)arr;
+        tim->EGR |= TIM_EGR_UG;
     } else if (mode == 1) {
         if (count) {
-            ctx->tim->CNT = 0;
-            ctx->tim->SR = ~TIM_SR_UIF;
-            ctx->tim->DIER |= TIM_DIER_UIE;
+            tim->CNT = 0;
+            tim->SR = ~TIM_SR_UIF;
+            tim->DIER |= TIM_DIER_UIE;
             ctx->running = 1;
-            ctx->tim->CR1 |= TIM_CR1_CEN;
+            tim->CR1 |= TIM_CR1_CEN;
         } else {
             ctx->running = 0;
-            ctx->tim->CR1 &= ~TIM_CR1_CEN;
-            ctx->tim->DIER &= ~TIM_DIER_UIE;
+            tim->CR1 &= ~TIM_CR1_CEN;
+            tim->DIER &= ~TIM_DIER_UIE;
         }
     }
     return 0;
@@ -196,45 +180,43 @@ static int timer_close(dd_t* dd)
 {
     timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
     if (!ctx) return -1;
-    ctx->running = 0;
-    ctx->tim->CR1 &= ~TIM_CR1_CEN;
-    ctx->tim->DIER &= ~TIM_DIER_UIE;
-    NVIC_DisableIRQ(ctx->irqn);
-    tim_owners[ctx->inst_no - 1] = NULL;
-    return 0;
-}
 
-static int timer_remove(dd_t* dd)
-{
-    if (dd->driver_data) {
-        osfree(dd->driver_data);
-        dd->driver_data = NULL;
-    }
+    uint32_t reg_base = dd->dev0->private->device_register;
+    TIM_TypeDef* tim = (TIM_TypeDef*)reg_base;
+    int inst_no = reg_to_inst(reg_base);
+
+    ctx->running = 0;
+    tim->CR1 &= ~TIM_CR1_CEN;
+    tim->DIER &= ~TIM_DIER_UIE;
+
+    static const IRQn_Type irq_map[] = {
+        TIM1_UP_IRQn, TIM2_IRQn, TIM3_IRQn, TIM4_IRQn,
+    };
+    NVIC_DisableIRQ(irq_map[inst_no - 1]);
+    tim_owners[inst_no - 1] = NULL;
     return 0;
 }
 
 static const pdrv_ops_t timer_ops = {
-    .ops_name = "clock",
     .open   = timer_open,
     .close  = timer_close,
     .write  = timer_write,
     .read   = timer_read,
 };
 
-static const pdrv_sysfunc_t timer_sysfunc = {
-    .probe = timer_probe,
-    .remove = timer_remove,
-};
-
-REGISTER_DRIVER("tim_clocktask", &timer_sysfunc, &timer_ops, "TIM clock source");
+REGISTER_DRIVER("tim_clock_1", "1\0tim1", NULL, &timer_ops, "TIM1 clock");
+REGISTER_DRIVER("tim_clock_2", "1\0tim2", NULL, &timer_ops, "TIM2 clock");
+REGISTER_DRIVER("tim_clock_3", "1\0tim3", NULL, &timer_ops, "TIM3 clock");
+REGISTER_DRIVER("tim_clock_4", "1\0tim4", NULL, &timer_ops, "TIM4 clock");
 
 static void tim_irq_handler(int idx)
 {
     dd_t* dd = tim_owners[idx];
     if (!dd) return;
     timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
-    if (ctx->tim->SR & TIM_SR_UIF) {
-        ctx->tim->SR = ~TIM_SR_UIF;
+    TIM_TypeDef* tim = (TIM_TypeDef*)dd->dev0->private->device_register;
+    if (tim->SR & TIM_SR_UIF) {
+        tim->SR = ~TIM_SR_UIF;
         if (ctx->running && dd->callback)
             dd->callback(dd->user_data);
     }

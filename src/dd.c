@@ -62,55 +62,132 @@ int bus_init(void)
     return 0;
 }
 /**
- * @brief 获取设备驱动描述符
- * 
- * @param device_name 设备类型名(如 "tim", "uart"), 精确匹配 dev->base->device_name
- * @param dev_no 设备实例号(0=不指定,匹配第一个;非0=精确匹配 dev->private->inst_no)
- * @param driver_ops_name 驱动操作名(如 "clock", "keypad"), 可为 NULL
- * @return dd_t* 设备驱动描述符指针
- * @note 设备匹配: 精确匹配 type + inst_no
- * @note 驱动匹配: 前缀匹配 + ops_name 筛选
+ * @brief 解析 device_dependency 字符串，填充 dev 槽
+ * @return 成功解析的设备数量，-1 失败
  */
-dd_t* bus_getdriver(char* device_name, uint8_t dev_no, char* driver_ops_name)
+static int resolve_deps(const char* dep_str, const pdev_t* slots[4])
 {
-    if(device_name == NULL)
-        return NULL;
+    if (!dep_str || !dep_str[0] || dep_str[0] == '0')
+        return 0;
 
-    // 设备匹配：精确匹配类型名 + inst_no 筛选设备
-    for(const pdev_t* dev = KSC_bus.dev_table; dev < KSC_bus.dev_table + KSC_bus.dev_count; dev++)
-    {
-        if(strcmp(device_name, dev->base->device_name) != 0)
-            continue;
+    int count = dep_str[0] - '0';
+    if (count <= 0 || count > 4) return -1;
 
-        if(dev_no != 0 && (!dev->private || dev->private->inst_no != dev_no))
-            continue;
-
-        // 驱动匹配：设备前缀 + ops_name 筛选驱动
-        for(const pdrv_t* drv = KSC_bus.drv_table; drv < KSC_bus.drv_table + KSC_bus.drv_count; drv++)
-        {
-            if(strncmp(device_name, drv->base->driver_name, strlen(device_name)) != 0)
-                continue;
-
-            if(driver_ops_name != NULL && strncmp(driver_ops_name, drv->ops->ops_name, strlen(driver_ops_name)) != 0)
-                continue;
-
-            dd_t* dd = osmalloc(sizeof(dd_t));
-            if(dd == NULL) return NULL;
-            dd->dev = dev;
-            dd->driver = drv;
-            dd->dd_ops = drv->ops;
-            dd->callback = CALLBACK_NULL_FUNC;
-            dd->driver_data = NULL;
-            dd->user_data = NULL;
-
-            if(drv->sysfunc && drv->sysfunc->probe)
-                if(drv->sysfunc->probe(dd) != 0) { osfree(dd); return NULL; }
-
-            return dd;
+    const char* p = dep_str + 2;
+    for (int i = 0; i < count; i++) {
+        size_t plen = strlen(p);
+        int found = 0;
+        for (uint32_t j = 0; j < KSC_bus.dev_count; j++) {
+            const pdev_t* dev = &KSC_bus.dev_table[j];
+            if (strncmp(p, dev->base->device_name, plen) == 0) {
+                slots[i] = dev;
+                found = 1;
+                break;
+            }
         }
+        if (!found) return -1;
+        p += plen + 1;
+    }
+    return count;
+}
+
+/**
+ * @brief 获取驱动描述符
+ * 
+ * @param driver_name 驱动名，精确匹配 drv->base->driver_name
+ * @return dd_t*      设备驱动描述符指针
+ * @note 匹配成功后自动解析 device_dependency 填入 dev0~dev3
+ *       并调用 probe
+ */
+dd_t* bus_getdriver(const char* driver_name)
+{
+    if (!driver_name) return NULL;
+
+    for (const pdrv_t* drv = KSC_bus.drv_table; drv < KSC_bus.drv_table + KSC_bus.drv_count; drv++)
+    {
+        if (strcmp(driver_name, drv->base->driver_name) != 0)
+            continue;
+
+        dd_t* dd = osmalloc(sizeof(dd_t));
+        if (!dd) return NULL;
+
+        dd->driver   = drv;
+        dd->dd_ops   = drv->ops;
+        dd->dev0     = NULL;
+        dd->dev1     = NULL;
+        dd->dev2     = NULL;
+        dd->dev3     = NULL;
+        dd->callback = CALLBACK_NULL_FUNC;
+        dd->driver_data = NULL;
+        dd->user_data   = NULL;
+
+        const pdev_t* slots[4] = {NULL, NULL, NULL, NULL};
+        if (resolve_deps(drv->device_dependency, slots) < 0) {
+            osfree(dd);
+            return NULL;
+        }
+        dd->dev0 = slots[0];
+        dd->dev1 = slots[1];
+        dd->dev2 = slots[2];
+        dd->dev3 = slots[3];
+
+        for (int i = 0; i < 4; i++) {
+            const pdev_t* d = slots[i];
+            if (d && d->private->rcc_bit) {
+                *(volatile uint32_t*)d->private->rcc_reg_addr |= d->private->rcc_bit;
+                (void)*(volatile uint32_t*)d->private->rcc_reg_addr;
+            }
+        }
+
+        dd->driver_data = oscalloc(1, 32);
+        if (!dd->driver_data) {
+            osfree(dd);
+            return NULL;
+        }
+
+        return dd;
     }
 
     return NULL;
+}
+
+/**
+ * @brief 重绑定 dd_t 的 dev 槽到指定设备
+ * @param dd       设备描述符
+ * @param slot     槽位 (0~3)
+ * @param dev_name 目标设备完整名
+ * @return int     0 成功，-1 失败（设备不存在或槽位无效）
+ * @note 仅交换 dev 指针，不调 remove/probe
+ */
+int bus_rebind_dev(dd_t* dd, int slot, const char* dev_name)
+{
+    if (!dd || slot < 0 || slot > 3 || !dev_name)
+        return -1;
+
+    const pdev_t* dev = NULL;
+    for (uint32_t i = 0; i < KSC_bus.dev_count; i++) {
+        if (strcmp(dev_name, KSC_bus.dev_table[i].base->device_name) == 0) {
+            dev = &KSC_bus.dev_table[i];
+            break;
+        }
+    }
+    if (!dev) return -1;
+
+    const pdev_t* old_dev = NULL;
+    switch (slot) {
+        case 0: old_dev = dd->dev0; dd->dev0 = dev; break;
+        case 1: old_dev = dd->dev1; dd->dev1 = dev; break;
+        case 2: old_dev = dd->dev2; dd->dev2 = dev; break;
+        case 3: old_dev = dd->dev3; dd->dev3 = dev; break;
+    }
+    if (old_dev && old_dev->private->rcc_bit) {
+        *(volatile uint32_t*)old_dev->private->rcc_reg_addr &= ~old_dev->private->rcc_bit;
+    }
+    if (dev->private->rcc_bit) {
+        *(volatile uint32_t*)dev->private->rcc_reg_addr |= dev->private->rcc_bit;
+        (void)*(volatile uint32_t*)dev->private->rcc_reg_addr;
+    }
+    return 0;
 }
 
 int null_func(struct dd_t* dev){return 0;}
@@ -125,9 +202,11 @@ int ddopen(dd_t* dd){
 int ddclose(dd_t* dd){
     if(!dd) return -1;
     if(dd->dd_ops->close) dd->dd_ops->close(dd);
-    dd_t* d = dd;
-    if(d->driver && d->driver->sysfunc && d->driver->sysfunc->remove)
-        d->driver->sysfunc->remove(d);
+    if (dd->driver_data) {
+        osfree(dd->driver_data);
+        dd->driver_data = NULL;
+    }
+    osfree(dd);
     return 0;
 }
 int ddread(dd_t* dd, void* data, uint32_t size, uint32_t mode){
