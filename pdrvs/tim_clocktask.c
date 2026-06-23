@@ -13,23 +13,24 @@
  * 使用方法
  * ============================================================
  * 
- *   dd_t* tmr = bus_getdriver("tim", 2, "clock");
+ *   dd_t* tmr = bus_getdriver("tim_clock_2");
  *   if (!tmr) while(1);
  *   tmr->callback  = my_tick_callback;
- *   tmr->user_data = my_data;
- *   ddopen(tmr);                            // 初始化, 默认周期 1000ms, 不计数
- *   ddwrite(tmr, NULL, 500, 0);             // mode=0: 设周期 500ms
- *   ddwrite(tmr, NULL, 1,   1);             // mode=1, count=1: 启动
+ *   tmr->user_data = (void*)(uintptr_t)500;  // 周期 ms, 默认 1000
+ *   ddopen(tmr);                              // 初始化, 不计数
+ *   ddwrite(tmr, NULL, 200, 1);               // mode=1: 设周期 200ms
+ *   ddwrite(tmr, NULL, 1,   2);               // mode=2, count=1: 启动
  *   // ... 定时器在后台运行 ...
- *   ddwrite(tmr, NULL, 0,   1);             // mode=1, count=0: 停止
+ *   ddwrite(tmr, NULL, 0,   2);               // mode=2, count=0: 停止
  *   ddclose(tmr);
  * 
  * ============================================================
  * 注意事项
  * ============================================================
  * 1. open 前必须设置 callback, 否则返回 -1
- * 2. 周期通过 ddwrite(mode=0) 设置, 默认 1000ms
- * 3. ddwrite(mode=1, count=1/0) 启动/停止
+ * 2. 周期通过 ddwrite(mode=1) 设置, 默认 1000ms
+ * 3. ddwrite(mode=2, count=1/0) 启动/停止
+ * 4. mode=0 始终为 no-op
  */
 
 #include "../inc/dd.h"
@@ -84,18 +85,13 @@ static const pdrv_ops_t timer_ops = {
     .read = timer_read,
 };
 
-REGISTER_DRIVER("tim_clocktask", NULL, NULL, &timer_ops, "TIM clock (PC)");
+REGISTER_DRIVER("tim_clocktask", NULL, &timer_ops, "TIM clock (PC)");
 
 #endif
 #if __USE_STM32__
 #include "stm32f1xx.h"
 
 static dd_t* tim_owners[4];
-
-typedef struct {
-    volatile uint8_t running;
-    uint16_t         period_ms;
-} timer_ctx_t;
 
 static int reg_to_inst(uint32_t reg_base)
 {
@@ -111,8 +107,7 @@ static int reg_to_inst(uint32_t reg_base)
 static int timer_open(dd_t* dd)
 {
     if (!dd->callback) return -1;
-    timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
-    if (ctx->period_ms == 0) ctx->period_ms = 1000;
+    uint16_t period = dd->user_data ? (uint16_t)(uintptr_t)dd->user_data : 1000;
 
     uint32_t reg_base = dd->dev0->private->device_register;
     TIM_TypeDef* tim = (TIM_TypeDef*)reg_base;
@@ -126,7 +121,7 @@ static int timer_open(dd_t* dd)
     tim_owners[inst_no - 1] = dd;
 
     uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
-    uint32_t arr = 10 * ctx->period_ms - 1;
+    uint32_t arr = 10 * period - 1;
     tim->PSC = (uint16_t)psc;
     tim->ARR = (uint16_t)arr;
     tim->EGR |= TIM_EGR_UG;
@@ -141,25 +136,21 @@ static int timer_open(dd_t* dd)
 static int timer_write(dd_t* dd, void* data, uint32_t count, uint32_t mode)
 {
     (void)data;
-    timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
     TIM_TypeDef* tim = (TIM_TypeDef*)dd->dev0->private->device_register;
 
-    if (mode == 0) {
-        ctx->period_ms = (uint16_t)count;
+    if (mode == 1) {
         uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
-        uint32_t arr = 10 * ctx->period_ms - 1;
+        uint32_t arr = 10 * count - 1;
         tim->PSC = (uint16_t)psc;
         tim->ARR = (uint16_t)arr;
         tim->EGR |= TIM_EGR_UG;
-    } else if (mode == 1) {
+    } else if (mode == 2) {
         if (count) {
             tim->CNT = 0;
             tim->SR = ~TIM_SR_UIF;
             tim->DIER |= TIM_DIER_UIE;
-            ctx->running = 1;
             tim->CR1 |= TIM_CR1_CEN;
         } else {
-            ctx->running = 0;
             tim->CR1 &= ~TIM_CR1_CEN;
             tim->DIER &= ~TIM_DIER_UIE;
         }
@@ -170,22 +161,18 @@ static int timer_write(dd_t* dd, void* data, uint32_t count, uint32_t mode)
 static int timer_read(dd_t* dd, void* data, uint32_t size, uint32_t kreigster)
 {
     (void)kreigster;
-    timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
+    TIM_TypeDef* tim = (TIM_TypeDef*)dd->dev0->private->device_register;
     if (size >= sizeof(uint16_t))
-        *(uint16_t*)data = ctx->period_ms;
+        *(uint16_t*)data = (tim->ARR + 1) / 10;
     return 0;
 }
 
 static int timer_close(dd_t* dd)
 {
-    timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
-    if (!ctx) return -1;
-
     uint32_t reg_base = dd->dev0->private->device_register;
     TIM_TypeDef* tim = (TIM_TypeDef*)reg_base;
     int inst_no = reg_to_inst(reg_base);
 
-    ctx->running = 0;
     tim->CR1 &= ~TIM_CR1_CEN;
     tim->DIER &= ~TIM_DIER_UIE;
 
@@ -204,20 +191,19 @@ static const pdrv_ops_t timer_ops = {
     .read   = timer_read,
 };
 
-REGISTER_DRIVER("tim_clock_1", "1\0tim1", NULL, &timer_ops, "TIM1 clock");
-REGISTER_DRIVER("tim_clock_2", "1\0tim2", NULL, &timer_ops, "TIM2 clock");
-REGISTER_DRIVER("tim_clock_3", "1\0tim3", NULL, &timer_ops, "TIM3 clock");
-REGISTER_DRIVER("tim_clock_4", "1\0tim4", NULL, &timer_ops, "TIM4 clock");
+REGISTER_DRIVER("tim_clock_1", "1\0tim1", &timer_ops, "TIM1 clock");
+REGISTER_DRIVER("tim_clock_2", "1\0tim2", &timer_ops, "TIM2 clock");
+REGISTER_DRIVER("tim_clock_3", "1\0tim3", &timer_ops, "TIM3 clock");
+REGISTER_DRIVER("tim_clock_4", "1\0tim4", &timer_ops, "TIM4 clock");
 
 static void tim_irq_handler(int idx)
 {
     dd_t* dd = tim_owners[idx];
     if (!dd) return;
-    timer_ctx_t* ctx = (timer_ctx_t*)dd->driver_data;
     TIM_TypeDef* tim = (TIM_TypeDef*)dd->dev0->private->device_register;
     if (tim->SR & TIM_SR_UIF) {
         tim->SR = ~TIM_SR_UIF;
-        if (ctx->running && dd->callback)
+        if ((tim->CR1 & TIM_CR1_CEN) && dd->callback)
             dd->callback(dd->user_data);
     }
 }

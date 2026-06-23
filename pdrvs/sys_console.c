@@ -61,7 +61,7 @@ static const pdrv_ops_t console_ops = {
     .ioctl = console_ioctl,
 };
 
-REGISTER_DRIVER("sys_console", NULL, NULL, &console_ops, "Console I/O");
+REGISTER_DRIVER("sys_console", NULL, &console_ops, "Console I/O");
 
 #endif
 
@@ -69,5 +69,5 @@ REGISTER_DRIVER("sys_console", NULL, NULL, &console_ops, "Console I/O");
 // #if __USE_STM32__
 // #include <stdio.h>
 // ... 
-// REGISTER_DRIVER("sys_console", NULL, NULL, &console_ops, "Console I/O");
+// REGISTER_DRIVER("sys_console", NULL, &console_ops, "Console I/O");
 // #endif

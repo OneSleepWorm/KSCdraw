@@ -1,0 +1,5 @@
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ticker.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/button16.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/super_spi.c
+)

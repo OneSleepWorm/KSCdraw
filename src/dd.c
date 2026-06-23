@@ -118,7 +118,6 @@ dd_t* bus_getdriver(const char* driver_name)
         dd->dev2     = NULL;
         dd->dev3     = NULL;
         dd->callback = CALLBACK_NULL_FUNC;
-        dd->driver_data = NULL;
         dd->user_data   = NULL;
 
         const pdev_t* slots[4] = {NULL, NULL, NULL, NULL};
@@ -137,12 +136,6 @@ dd_t* bus_getdriver(const char* driver_name)
                 *(volatile uint32_t*)d->private->rcc_reg_addr |= d->private->rcc_bit;
                 (void)*(volatile uint32_t*)d->private->rcc_reg_addr;
             }
-        }
-
-        dd->driver_data = oscalloc(1, 32);
-        if (!dd->driver_data) {
-            osfree(dd);
-            return NULL;
         }
 
         return dd;
@@ -202,10 +195,6 @@ int ddopen(dd_t* dd){
 int ddclose(dd_t* dd){
     if(!dd) return -1;
     if(dd->dd_ops->close) dd->dd_ops->close(dd);
-    if (dd->driver_data) {
-        osfree(dd->driver_data);
-        dd->driver_data = NULL;
-    }
     osfree(dd);
     return 0;
 }

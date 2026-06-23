@@ -16,7 +16,7 @@ extern dd_t* ksc_timer;
 #define kscprintf(fmt, ...) \
     do { if (ksc_console) ddioctl(ksc_console, fmt, ##__VA_ARGS__); } while(0)
 #define kscdelay(ms) \
-    do { if (ksc_timer) ddwrite(ksc_timer, NULL, ms, 0); } while(0)
+    do { if (ksc_timer) ddwrite(ksc_timer, NULL, ms, 1); } while(0)
 #define kscgettime() \
     ({ uint32_t _t = 0; if (ksc_timer) ddread(ksc_timer, &_t, 0, 0); _t; })
 

@@ -30,8 +30,8 @@
  * │                                                         │
  * │  第2层: pdrv_t (驱动)                                    │
  * │  作用: 描述一类驱动程序的能力                             │
- * │  内容: 驱动名 + device_dependency + sysfunc + ops         │
- * │  注册: REGISTER_DRIVER(name, dep, sysfunc, ops, desc)    │
+ * │  内容: 驱动名 + device_dependency + reserved + ops        │
+ * │  注册: REGISTER_DRIVER(name, dep, ops, desc)             │
  * │  命名: 独立名如 "tim_clocktask", "spi_master"             │
  * │                                                         │
  * │  第3层: dd_t (设备描述符)                                │
@@ -55,8 +55,6 @@
  *               "3\0apb\0spi\0gpio" → 匹配三个设备, 填 dev0/dev1/dev2
  *
  *   第3步: 匹配到的设备指针填入 dd->dev0..dev3
- *
- *   第4步: 若 driver 定义了 sysfunc->probe, 调用 probe(dd)
  *
  *   返回: 新分配的 dd_t* (用户保证生命周期)
  *
@@ -110,16 +108,11 @@
  *    简单场景下用户可直接使用无需 free; 高频创建/销毁场景需
  *    用户自行管理.
  *
- * 4. callback 与 driver_data / user_data 的约定
+ * 4. callback 与 user_data 的约定
  *    - callback: 由驱动在特定事件时调用, 参数为 user_data
- *    - driver_data: 由驱动的 probe 预分配, close 释放, 用户不应直接修改
  *    - user_data: 由用户在 ddopen 前配置
  *
- * 5. probe 回调
- *    bus_getdriver 匹配成功后自动调用 drv->sysfunc->probe(dd),
- *    用于预分配 driver_data。probe 为 NULL 则跳过。
- *
- * 6. bus_rebind_dev 仅交换 dev 指针，不调 remove/probe。
+ * 5. bus_rebind_dev 仅交换 dev 指针。
  *    驱动若缓存了寄存器基址, 需自行处理重绑定一致性。
  *
  * ============================================================
@@ -130,22 +123,12 @@
  *   REGISTER_DEVICE("tim3", 0x40000400);
  *
  *   // === 驱动注册 (timer.c) ===
- *   static int timer_probe(dd_t* dd) {
- *       timer_ctx_t* ctx = osmalloc(sizeof(timer_ctx_t));
- *       if(!ctx) return -1;
- *       ctx->period_ms = 1000;
- *       dd->driver_data = ctx;
- *       return 0;
- *   }
- *   static const pdrv_sysfunc_t timer_sysfunc = {
- *       .probe = timer_probe,
- *   };
  *   static pdrv_ops_t timer_ops = {
  *       .open = timer_open,
  *       .close = timer_close,
  *       .read = timer_read,
  *   };
- *   REGISTER_DRIVER("tim_clocktask", "1\0tim", &timer_sysfunc, &timer_ops, "TIM clock");
+ *   REGISTER_DRIVER("tim_clocktask", "1\0tim", &timer_ops, "TIM clock");
  *
  *   // === 用户使用 ===
  *   dd_t* tmr = bus_getdriver("tim_clocktask");
@@ -209,23 +192,12 @@ typedef struct pdrv_base_t{
 
 typedef struct pdrv_ops_t pdrv_ops_t;
 typedef struct dd_t dd_t;
-typedef int (*driver_probe_func)(dd_t* dd);
-typedef int (*driver_remove_func)(dd_t* dd);
-
-/**
- * @brief 驱动系统函数
- * @note  用于设备初始化与注销, 由总线调用，一般实现为预堆分配driver_data空间与释放
- */
-typedef struct pdrv_sysfunc_t{
-    driver_probe_func probe;
-    driver_remove_func remove;
-} pdrv_sysfunc_t;
 
 /**
  * @brief 驱动完整结构
  * @param base  驱动名
  * @param device_dependency  设备依赖关系
- * @param sysfunc  驱动系统函数指针
+ * @param reserved  保留字段 (对齐用)
  * @param ops  驱动操作集指针
  * @note  device_dependency 格式:
  *        "N\0pat1\0pat2\0pat3"
@@ -238,8 +210,8 @@ typedef struct pdrv_sysfunc_t{
 typedef struct __attribute__((aligned(16))) pdrv_t {
     const pdrv_base_t* base;
     const char* device_dependency;
-    const pdrv_sysfunc_t* sysfunc;
-    const pdrv_ops_t* ops;
+    void*              reserved;
+    const pdrv_ops_t*  ops;
 } pdrv_t;
 
 /**
@@ -256,7 +228,6 @@ typedef void* (*void_func_t)(void* data);
  *        dev0~dev3   — 总线根据 device_dependency 匹配的设备指针
  *        dd_ops      — 指向某个 pdrv_ops_t, 决定 open/close/read/write/ioctl
  *        callback    — 异步回调 (如定时器到期), 参数为 user_data
- *        driver_data — 由 probe 预分配, close 释放
  *        user_data   — 用户自定义参数, 在 ddopen 前设置
  */
 typedef struct dd_t{
@@ -267,7 +238,6 @@ typedef struct dd_t{
     const pdev_t* dev3;
     const pdrv_ops_t* dd_ops;
     void_func_t callback;
-    void* driver_data;
     void* user_data;
 } dd_t;
 
@@ -317,24 +287,23 @@ typedef struct pdrv_ops_t{
  * @brief 静态注册驱动
  * @param drvname       驱动名 (如 "tim_clocktask")
  * @param dep           device_dependency 字符串 (如 "1\0tim")
- * @param sysfunc_ptr   指向 pdrv_sysfunc_t 的指针
  * @param ops_ptr       指向 pdrv_ops_t 的指针
  * @param desc          描述字符串
  * @note  编入 "pdrv_table" 链接段
- *        字段顺序: base, dep, sysfunc, ops
+ *        字段顺序: base, dep, reserved, ops
  */
-#define _REGISTER_DRIVER_IMPL(drvname, dep, sysfunc_ptr, ops_ptr, desc, ctr) \
+#define _REGISTER_DRIVER_IMPL(drvname, dep, ops_ptr, desc, ctr) \
     static const pdrv_base_t _CONCAT(_DRV_BASE_, ctr) = {drvname}; \
     static const pdrv_t _CONCAT(_DRV_, ctr) \
     __attribute__((section("pdrv_table"), used)) = { \
         &_CONCAT(_DRV_BASE_, ctr), \
         dep, \
-        sysfunc_ptr, \
+        NULL, \
         ops_ptr \
     };
 
-#define REGISTER_DRIVER(drvname, dep, sysfunc_ptr, ops_ptr, desc) \
-    _REGISTER_DRIVER_IMPL(drvname, dep, sysfunc_ptr, ops_ptr, desc, __COUNTER__)
+#define REGISTER_DRIVER(drvname, dep, ops_ptr, desc) \
+    _REGISTER_DRIVER_IMPL(drvname, dep, ops_ptr, desc, __COUNTER__)
 
 extern const pdev_t __start_pdev_table[];
 extern const pdev_t __stop_pdev_table[];
@@ -358,18 +327,18 @@ extern const pdrv_t __stop_pdrv_table[];
 #define REGISTER_DEVICE(name, reg, rcc_addr, rcc_bit) \
     _REGISTER_DEVICE_IMPL(name, reg, rcc_addr, rcc_bit, __COUNTER__)
 
-#define _REGISTER_DRIVER_IMPL(drvname, dep, sysfunc_ptr, ops_ptr, desc, ctr) \
+#define _REGISTER_DRIVER_IMPL(drvname, dep, ops_ptr, desc, ctr) \
     static const pdrv_base_t _CONCAT(_DRV_BASE_, ctr) = {drvname}; \
     static const pdrv_t _CONCAT(_DRV_, ctr) \
     __attribute__((section("pdrv_table"), used)) = { \
         &_CONCAT(_DRV_BASE_, ctr), \
         dep, \
-        sysfunc_ptr, \
+        NULL, \
         ops_ptr \
     };
 
-#define REGISTER_DRIVER(drvname, dep, sysfunc_ptr, ops_ptr, desc) \
-    _REGISTER_DRIVER_IMPL(drvname, dep, sysfunc_ptr, ops_ptr, desc, __COUNTER__)
+#define REGISTER_DRIVER(drvname, dep, ops_ptr, desc) \
+    _REGISTER_DRIVER_IMPL(drvname, dep, ops_ptr, desc, __COUNTER__)
 
 extern const pdev_t __start_pdev_table[];
 extern const pdev_t __stop_pdev_table[];
