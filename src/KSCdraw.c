@@ -688,4 +688,65 @@ void kscreenupdate(k_draw_device* dev,KSC_window* screen){
 }
 
 
+/* --- 默认设备屏幕接口 (KSCGUI 接管后仅留空桩) --- */
+#if __USE_STM32__
+void screen_init(void) { }
+void screen_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height)
+{
+    (void)Gx; (void)Gy; (void)width; (void)height;
+}
+void screen_setcolorpixels(const KSCCOLOR* color, uint16_t num)
+{
+    (void)color; (void)num;
+}
 #endif
+
+#if __USE_PC__
+#include "../third_party/easyx/include/graphics.h"
+#include <stdio.h>
+
+static uint32_t color16to24(uint16_t color16)
+{
+    uint8_t r5 = (color16 >> 11) & 0x1F;
+    uint8_t g6 = (color16 >> 5) & 0x3F;
+    uint8_t b5 = (color16 & 0x1F);
+    uint8_t r8 = (r5 << 3) | (r5 >> 2);
+    uint8_t g8 = (g6 << 2) | (g6 >> 4);
+    uint8_t b8 = (b5 << 3) | (b5 >> 2);
+    return (b8 << 16) | (g8 << 8) | r8;
+}
+
+#define SCALE 3
+void screen_init(void)
+{
+    initgraph(TFTx*SCALE,TFTy*SCALE);
+    setlinecolor(BLACK);
+    HWND hwnd = GetHWnd();
+    MoveWindow(hwnd, 300, 100,TFTx*SCALE,TFTy*SCALE+10*SCALE, TRUE);
+}
+static uint16_t sSx,sSy,sEx,sEy,sCx,sCy;
+void screen_setcanvas(uintxy Gx,uintxy Gy, uintxy width,uintxy height)
+{
+    sSx = Gx; sSy = Gy; sEx=Gx+width-1; sEy=Gy+height-1; sCx=Gx; sCy=Gy;
+}
+static void movecursor(void)
+{
+    sCx++;
+    if(sCx > sEx){
+        sCx = sSx;
+        sCy++;
+    }
+}
+void screen_setcolorpixels(const KSCCOLOR* color,uint16_t num)
+{
+    while(num--){
+        KSCCOLOR ncolor = *color++;
+        ncolor = (ncolor)>>8| (ncolor<<8);
+        setfillcolor(color16to24(ncolor));
+        solidrectangle(sCx*SCALE,sCy*SCALE,sCx*SCALE+SCALE,sCy*SCALE+SCALE);
+        movecursor();
+    }
+}
+#endif
+
+#endif /* __USE_LCD__ */

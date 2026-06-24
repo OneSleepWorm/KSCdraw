@@ -28,7 +28,7 @@ add_subdirectory(src)
 
 add_subdirectory(pdrvs)
 
-target_link_libraries(KSCOS PRIVATE KSCDRAW_SRC easyx)
+target_link_libraries(KSCOS PRIVATE KSCOS_SRC easyx)
 
 # target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 #     # Add user defined include paths
@@ -37,5 +37,4 @@ target_link_libraries(KSCOS PRIVATE KSCDRAW_SRC easyx)
 # )
 
 # target_compile_definitions(KSCdraw PRIVATE __USE_PC__=1)
-set_source_files_properties(KSCdisplay.c PROPERTIES LANGUAGE CXX)
 
