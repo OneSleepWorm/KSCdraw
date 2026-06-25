@@ -8,15 +8,31 @@
 
 #define TFT_W 240
 #define TFT_H 320
+#define GUI_MAX_WIN 4
 
 typedef struct {
-    app_t*         sspi;
-    k_draw_device  dev;
-    KSC_window     scr;
-    uint8_t        pixbuf[512];
+    KSC_window  scr;
+} gui_win_t;
+
+typedef struct {
+    app_t*          spi[2];         /* [0]=super_spi1, [1]=super_spi2 */
+    app_t*          sspi;           /* currently active SPI */
+    uint8_t         sspi_opened;
+    k_draw_device   dev;
+    gui_win_t       wins[GUI_MAX_WIN];
+    uint8_t         win_count;
+    uint8_t         active_win;
+    uint8_t         pixbuf[512];
+    const ksc_obj_t* obj_ptr;       /* user-managed object array (setobjs) */
+    uint16_t        obj_count;      /* total objects in user array */
 } gui_ctx_t;
 
 static gui_ctx_t* _ctx;
+
+/* ================================================================
+ * SPI device functions
+ * ================================================================ */
+static void gui_init_stub(void) { }
 
 static void gui_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
@@ -52,45 +68,16 @@ static void gui_pixels(const KSCCOLOR* colors, uint16_t num)
     }
 }
 
-static void gui_window_setcanvas(k_draw_device* dev, KSC_window* screen, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
+static void gui_window_setcanvas(k_draw_device* dev, KSC_window* screen,
+    uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
     (void)dev;
     gui_setcanvas(Gx + screen->ssx, Gy + screen->ssy, width, height);
 }
 
-static int gui_open(app_t* app)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)osmalloc(sizeof(gui_ctx_t));
-    if (!ctx) return -1;
-    memset(ctx, 0, sizeof(gui_ctx_t));
-    ctx->sspi = app->app0;
-    if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
-    ctx->dev.setcanvas = gui_setcanvas;
-    ctx->dev.setcolorpixels = gui_pixels;
-    ctx->dev.setwindows = gui_window_setcanvas;
-    ctx->scr.ssx = 0;
-    ctx->scr.ssy = 0;
-    ctx->scr.width = TFT_W;
-    ctx->scr.height = TFT_H;
-    ctx->scr.bk = 0;
-    ctx->scr.Mode = 0;
-    ctx->scr.objbuf = NULL;
-    ctx->scr.objnum = 0;
-    ctx->scr.dirty_rect_buf = NULL;
-    ctx->scr.dirty_rect_num = 0;
-    app->app_data = ctx;
-    return 0;
-}
-
-static int gui_close(app_t* app)
-{
-    if (app->app_data) {
-        osfree(app->app_data);
-        app->app_data = NULL;
-    }
-    return 0;
-}
-
+/* ================================================================
+ * ST7789 initialization
+ * ================================================================ */
 static void gui_init_st7789(void)
 {
     app_t* sspi = _ctx->sspi;
@@ -117,78 +104,221 @@ static void gui_init_st7789(void)
     }
 }
 
+/* ================================================================
+ * App lifecycle
+ * ================================================================ */
+static int gui_open(app_t* app)
+{
+    gui_ctx_t* ctx = (gui_ctx_t*)osmalloc(sizeof(gui_ctx_t));
+    if (!ctx) return -1;
+    memset(ctx, 0, sizeof(gui_ctx_t));
+
+    ctx->spi[0] = app->app0;    /* super_spi1 */
+    ctx->spi[1] = app->app1;    /* super_spi2 */
+
+    ctx->dev.init = gui_init_stub;
+    ctx->dev.setcanvas = gui_setcanvas;
+    ctx->dev.setcolorpixels = gui_pixels;
+    ctx->dev.setwindows = gui_window_setcanvas;
+
+    /* Open default SPI: SPI2 first, fallback to SPI1 */
+    if (ctx->spi[1]) ctx->sspi = ctx->spi[1];
+    else ctx->sspi = ctx->spi[0];
+    if (ctx->sspi) {
+        if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
+        ctx->sspi_opened = 1;
+    }
+
+    /* Default window 0: full screen */
+    ctx->wins[0].scr.ssx = 0;
+    ctx->wins[0].scr.ssy = 0;
+    ctx->wins[0].scr.width = TFT_W;
+    ctx->wins[0].scr.height = TFT_H;
+    ctx->wins[0].scr.bk = 0;
+    ctx->wins[0].scr.Mode = 0x80;
+    ctx->wins[0].scr.objbuf = NULL;
+    ctx->wins[0].scr.objnum = 0;
+    ctx->win_count = 1;
+    ctx->active_win = 0;
+
+    app->app_data = ctx;
+    return 0;
+}
+
+static int gui_close(app_t* app)
+{
+    gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
+    if (ctx) {
+        if (ctx->sspi && ctx->sspi_opened) appclose(ctx->sspi);
+        osfree(ctx);
+        app->app_data = NULL;
+    }
+    return 0;
+}
+
+/* ================================================================
+ * ioctl handler
+ * ================================================================ */
 static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
     _ctx = ctx;
+    KSC_window* scr = &ctx->wins[ctx->active_win].scr;
+
+    /* --- lifecycle --- */
+    if (strcmp(cmd, "setspi") == 0) {
+        int n = va_arg(ap, int);
+        if (n < 1 || n > 2) return 0;
+        app_t* new_spi = ctx->spi[n - 1];
+        if (!new_spi || new_spi == ctx->sspi) return 0;
+        if (ctx->sspi_opened) appclose(ctx->sspi);
+        ctx->sspi = new_spi;
+        if (appopen(ctx->sspi) < 0) { ctx->sspi = NULL; ctx->sspi_opened = 0; return 0; }
+        return 1;
+    }
+
     if (strcmp(cmd, "init") == 0) {
+        if (!ctx->sspi || !ctx->sspi_opened) return 0;
         gui_init_st7789();
         return 1;
     }
-    if (strcmp(cmd, "clear") == 0) {
-        KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kfull(&ctx->dev, &ctx->scr, c, 0, 0, TFT_W, TFT_H);
+
+    if (strcmp(cmd, "orient") == 0) {
+        uint8_t mode = (uint8_t)va_arg(ap, int);
+        uint8_t mcmd = 0x36;
+        appwrite(ctx->sspi, &mcmd, 1, 10);
+        appwrite(ctx->sspi, &mode, 1, 11);
         return 1;
     }
+
+    /* --- window management --- */
+    if (strcmp(cmd, "wcreate") == 0) {
+        uint16_t x = (uint16_t)va_arg(ap, int);
+        uint16_t y = (uint16_t)va_arg(ap, int);
+        uint16_t w = (uint16_t)va_arg(ap, int);
+        uint16_t h = (uint16_t)va_arg(ap, int);
+        KSCCOLOR bk = (KSCCOLOR)va_arg(ap, int);
+        for (uint8_t i = 0; i < GUI_MAX_WIN; i++) {
+            if (ctx->wins[i].scr.Mode & 0x80) continue;
+            ctx->wins[i].scr.ssx = x;
+            ctx->wins[i].scr.ssy = y;
+            ctx->wins[i].scr.width = w;
+            ctx->wins[i].scr.height = h;
+            ctx->wins[i].scr.bk = bk;
+            ctx->wins[i].scr.Mode = 0x80;
+            ctx->wins[i].scr.objbuf = NULL;
+            ctx->wins[i].scr.objnum = 0;
+            ctx->win_count++;
+            return (int)i;
+        }
+        return -1;
+    }
+
+    if (strcmp(cmd, "wdelete") == 0) {
+        int id = va_arg(ap, int);
+        if (id < 0 || id >= GUI_MAX_WIN) return 0;
+        if (!(ctx->wins[id].scr.Mode & 0x80)) return 0;
+        ctx->wins[id].scr.Mode = 0;
+        ctx->wins[id].scr.objbuf = NULL;
+        ctx->wins[id].scr.objnum = 0;
+        ctx->win_count--;
+        if (ctx->active_win == id && ctx->win_count > 0) {
+            for (uint8_t i = 0; i < GUI_MAX_WIN; i++) {
+                if (ctx->wins[i].scr.Mode & 0x80) {
+                    ctx->active_win = i;
+                    break;
+                }
+            }
+        }
+        return 1;
+    }
+
+    if (strcmp(cmd, "wselect") == 0) {
+        int id = va_arg(ap, int);
+        if (id < 0 || id >= GUI_MAX_WIN) return 0;
+        if (!(ctx->wins[id].scr.Mode & 0x80)) return 0;
+        ctx->active_win = (uint8_t)id;
+        return 1;
+    }
+
+    if (strcmp(cmd, "wclear") == 0) {
+        kfull(&ctx->dev, scr, scr->bk, 0, 0, scr->width, scr->height);
+        return 1;
+    }
+
+    /* --- drawing primitives (active window) --- */
+    if (strcmp(cmd, "clear") == 0) {
+        KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
+        kfull(&ctx->dev, scr, c, 0, 0, scr->width, scr->height);
+        return 1;
+    }
+
     if (strcmp(cmd, "pixel") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        ksetpixel(&ctx->dev, &ctx->scr, c, x, y);
+        ksetpixel(&ctx->dev, scr, c, x, y);
         return 1;
     }
-    if (strcmp(cmd, "fill") == 0) {
+
+    if (strcmp(cmd, "fill") == 0 || strcmp(cmd, "frect") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint16_t w = (uint16_t)va_arg(ap, int);
         uint16_t h = (uint16_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kfull(&ctx->dev, &ctx->scr, c, x, y, w, h);
+        kfull(&ctx->dev, scr, c, x, y, w, h);
         return 1;
     }
+
     if (strcmp(cmd, "rect") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint16_t w = (uint16_t)va_arg(ap, int);
         uint16_t h = (uint16_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kbox(&ctx->dev, &ctx->scr, c, x, y, w, h);
+        kbox(&ctx->dev, scr, c, x, y, w, h);
         return 1;
     }
+
     if (strcmp(cmd, "circle") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint8_t r = (uint8_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kcircle(&ctx->dev, &ctx->scr, c, x, y, r);
+        kcircle(&ctx->dev, scr, c, x, y, r);
         return 1;
     }
+
     if (strcmp(cmd, "fcircle") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint8_t r = (uint8_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kfillcircle(&ctx->dev, &ctx->scr, c, x, y, r);
+        kfillcircle(&ctx->dev, scr, c, x, y, r);
         return 1;
     }
+
     if (strcmp(cmd, "line") == 0) {
         uint16_t x0 = (uint16_t)va_arg(ap, int);
         uint16_t y0 = (uint16_t)va_arg(ap, int);
         uint16_t x1 = (uint16_t)va_arg(ap, int);
         uint16_t y1 = (uint16_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kline(&ctx->dev, &ctx->scr, c, x0, y0, x1, y1);
+        kline(&ctx->dev, scr, c, x0, y0, x1, y1);
         return 1;
     }
+
     if (strcmp(cmd, "arc") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint8_t  r = (uint8_t)va_arg(ap, int);
         uint8_t  d = (uint8_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        karc(&ctx->dev, &ctx->scr, c, x, y, r, d);
+        karc(&ctx->dev, scr, c, x, y, r, d);
         return 1;
     }
+
     if (strcmp(cmd, "rrect") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -196,9 +326,10 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         uint16_t h = (uint16_t)va_arg(ap, int);
         uint8_t  r = (uint8_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kroundrect(&ctx->dev, &ctx->scr, c, x, y, w, h, r);
+        kroundrect(&ctx->dev, scr, c, x, y, w, h, r);
         return 1;
     }
+
     if (strcmp(cmd, "frrect") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -206,34 +337,50 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         uint16_t h = (uint16_t)va_arg(ap, int);
         uint8_t  r = (uint8_t)va_arg(ap, int);
         KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-        kfillroundrect(&ctx->dev, &ctx->scr, c, x, y, w, h, r);
+        kfillroundrect(&ctx->dev, scr, c, x, y, w, h, r);
         return 1;
     }
+
     if (strcmp(cmd, "char") == 0) {
         uint16_t x  = (uint16_t)va_arg(ap, int);
         uint16_t y  = (uint16_t)va_arg(ap, int);
         char     ch = (char)va_arg(ap, int);
         KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
         KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-        kchar(&ctx->dev, &ctx->scr, ch, x, y, fg, bg);
+        kchar(&ctx->dev, scr, ch, x, y, fg, bg);
         return 1;
     }
+
     if (strcmp(cmd, "string") == 0) {
         uint16_t x  = (uint16_t)va_arg(ap, int);
         uint16_t y  = (uint16_t)va_arg(ap, int);
         const char* s = va_arg(ap, const char*);
         KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
         KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-        kstring(&ctx->dev, &ctx->scr, s, x, y, fg, bg);
+        kstring(&ctx->dev, scr, s, x, y, fg, bg);
         return 1;
     }
+
+#if __USE_CHINESE__
+    if (strcmp(cmd, "strcn") == 0) {
+        uint16_t x  = (uint16_t)va_arg(ap, int);
+        uint16_t y  = (uint16_t)va_arg(ap, int);
+        const char* s = va_arg(ap, const char*);
+        KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
+        KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
+        kstringchinese(&ctx->dev, scr, s, x, y, fg, bg);
+        return 1;
+    }
+#endif
+
+    /* --- image (direct SPI fast-path) --- */
     if (strcmp(cmd, "image") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
         uint8_t  w = (uint8_t)va_arg(ap, int);
         uint8_t  h = (uint8_t)va_arg(ap, int);
         const uint8_t* img = va_arg(ap, const uint8_t*);
-        gui_window_setcanvas(&ctx->dev, &ctx->scr, x, y, w, h);
+        gui_window_setcanvas(&ctx->dev, scr, x, y, w, h);
         uint16_t remain = w * h * 2;
         while (remain) {
             uint16_t n = (remain > sizeof(ctx->pixbuf)) ? (uint16_t)sizeof(ctx->pixbuf) : remain;
@@ -244,6 +391,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         }
         return 1;
     }
+
     if (strcmp(cmd, "ibig") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -255,11 +403,12 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
             for (uint8_t ww = 0; ww < w; ww++) {
                 KSCCOLOR c = ((KSCCOLOR)img[0] << 8) | img[1];
                 img += 2;
-                kfull(&ctx->dev, &ctx->scr, c, x + ww * s, y + hh * s, s, s);
+                kfull(&ctx->dev, scr, c, x + ww * s, y + hh * s, s, s);
             }
         }
         return 1;
     }
+
     if (strcmp(cmd, "ibin") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -268,25 +417,54 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         const uint8_t* img = va_arg(ap, const uint8_t*);
         KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
         KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-        kimagebin(&ctx->dev, &ctx->scr, img, x, y, w, h, fg, bg);
+        kimagebin(&ctx->dev, scr, img, x, y, w, h, fg, bg);
         return 1;
     }
-    if (strcmp(cmd, "orient") == 0) {
-        uint8_t mode = (uint8_t)va_arg(ap, int);
-        uint8_t mcmd = 0x36;
-        appwrite(ctx->sspi, &mcmd, 1, 10);
-        appwrite(ctx->sspi, &mode, 1, 11);
+
+    /* --- object system --- */
+    if (strcmp(cmd, "setobjs") == 0) {
+        uint16_t n = (uint16_t)va_arg(ap, int);
+        const ksc_obj_t* objs = va_arg(ap, const ksc_obj_t*);
+        ctx->obj_count = n;
+        ctx->obj_ptr = objs;
         return 1;
     }
+
+    if (strcmp(cmd, "drawobjs") == 0) {
+        uint16_t n = (uint16_t)va_arg(ap, int);
+        if (!ctx->obj_ptr || ctx->obj_count == 0 || n == 0) return 0;
+        if (n > ctx->obj_count) n = ctx->obj_count;
+        for (uint16_t i = 0; i < n; i++) {
+            const ksc_obj_t* obj = &ctx->obj_ptr[i];
+            if ((obj->_type & (_active|_visible)) != (_active|_visible)) continue;
+            kobjdraw(&ctx->dev, scr, (ksc_obj_t*)obj);
+        }
+        return 1;
+    }
+
+    if (strcmp(cmd, "drawobj") == 0) {
+        uint16_t idx = (uint16_t)va_arg(ap, int);
+        if (!ctx->obj_ptr || idx >= ctx->obj_count) return 0;
+        const ksc_obj_t* obj = &ctx->obj_ptr[idx];
+        if ((obj->_type & (_active|_visible)) != (_active|_visible)) return 0;
+        kobjdraw(&ctx->dev, scr, (ksc_obj_t*)obj);
+        return 1;
+    }
+
     return 0;
 }
 
+/* ================================================================
+ * App descriptor
+ * ================================================================ */
 static const papp_ops_t kscgui_ops = {
     .open  = gui_open,
     .close = gui_close,
     .ioctl = gui_ioctl,
 };
 
-REGISTER_APP_EX("KSCGUI2", "0", "1\0super_spi2", &kscgui_ops, "KSC GUI via super_spi2");
+/* Dependencies: super_spi1 (app0), super_spi2 (app1) */
+REGISTER_APP_EX("KSCGUI", "0", "2\0super_spi1\0super_spi2", &kscgui_ops,
+    "KSC GUI Manager (SPI1/SPI2, multi-window, object rendering)");
 
 #endif

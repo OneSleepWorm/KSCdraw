@@ -3,13 +3,15 @@
 ## 概述
 
 KSCGUI 注册于 app 框架，通过 `appioctl()` 接受命令。
-所有绘图基于 KSCdraw 引擎，输出至 super_spi2 → ST7789（240×320）。
+所有绘图基于 KSCdraw 引擎，输出至 super_spi1/2 → ST7789（240×320）。
+支持多窗口（最多 4 个）和用户管理的对象渲染系统。
 
 调用方式：
 
 ```c
-app_t* gui = appget("KSCGUI2");
+app_t* gui = appget("KSCGUI");
 appopen(gui);
+appioctl(gui, "setspi", 2);   // optional, default=SPI2
 appioctl(gui, "init");
 appioctl(gui, "clear", 0x0000);
 ```
@@ -20,10 +22,10 @@ appioctl(gui, "clear", 0x0000);
 
 | 字段 | 值 |
 |------|-----|
-| 注册名 | `"KSCGUI2"` |
-| 依赖字符串 | `"1\0super_spi2"`（app->app0 自动解析为 super_spi2） |
+| 注册名 | `"KSCGUI"` |
+| 依赖字符串 | `app_dep: "2\0super_spi1\0super_spi2"`（app0=super_spi1, app1=super_spi2） |
 | 屏幕 | ST7789, 240×320 竖屏 |
-| 依赖打开时机 | `open` 时自动 `appopen(app->app0)` |
+| 依赖打开时机 | `open` 时默认打开 SPI2（若不可用则回退 SPI1）；可通过 `"setspi"` 运行时切换 |
 
 ---
 
@@ -381,7 +383,7 @@ appioctl(gui, "orient", 0x60); // 横屏
 
 ## 注意事项
 
-- **必须先 `appget("KSCGUI2")` + `appopen()`** 才能发任何命令。
+- **必须先 `appget("KSCGUI")` + `appopen()`** 才能发任何命令。
 - **`"init"` 仅需一次**。重复调无害但耗时。
 - 图片数据固定为**大端序**——与 KSCdraw 算法产生的 KSCCOLOR（小端序 uint16_t）不同。`"image"` 和 `"ibig"` 不经过 `uint16_t*` 强制转换，逐字节处理，无字节序问题。
 - 栈空间 1KB，勿在栈上声明大数组。`"string"` 的 `s` 参数指向外部缓冲区，不会复制。

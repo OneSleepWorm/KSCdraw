@@ -305,19 +305,8 @@ KSCOS/
 | 函数 | 说明 |
 |---|---|
 | `kobjdraw(dev, screen, obj)` | 绘制单个 `ksc_obj_t`（按 `_type` 分发） |
-| `kobjsdraw(dev, screen, obj_array, num)` | 批量绘制（跳过已绘制对象，节省时间） |
-| `kobjsdraw_f(dev, screen, obj_array, num)` | 强制绘制（忽略绘制状态） |
-
-### 脏矩形增量刷新
-
-| 函数 | 说明 |
-|---|---|
-| `kdirtyrect_add(dev, screen, x, y, w, h)` | 手动标记脏矩形 |
-| `kdirtyrect_add_obj(dev, screen, obj)` | 按对象位置标记脏矩形 |
-| `kdirtyrect_del(dev, screen)` | 清除所有脏矩形 |
-| `kdirtyrectmerge(dev, screen, mode)` | 合并脏矩形（mode: 1=面积阈值, 2/3=重叠检测） |
+| `kobjsdraw(dev, screen, obj_array, num)` | 批量绘制（跳过非活跃/隐藏对象） |
 | `kscreendraw(dev, screen)` | 全屏重绘（背景 + 所有对象） |
-| `kscreenupdate(dev, screen)` | 增量刷新：合并脏区 → 重绘背景 → 标记受影响对象 → 重绘 → 清除脏区 |
 
 ### 输入系统
 
@@ -374,7 +363,7 @@ KSCOS/
 │    输入层 (input)  │  绘图层 (KSCdraw)        │
 │  input_t 队列      │  k_draw_device           │
 │  input_device 驱动 │  KSC_window + ksc_obj_t  │
-│                    │  脏矩形增量渲染            │
+│                    │  对象标志位控制绘制         │
 ├────────────────────┼─────────────────────────┤
 │              HAL 抽象层                        │
 │  KSCdisplay   KSCOSsystem   W25Q64   Serial  │
@@ -389,9 +378,9 @@ KSCOS/
 ```
 key_scan() → input_add(&evt) → 输入队列
                                   ↓
-main loop: input_get(KEY_ID) → 解析按键 → 更新 ksc_obj_t
+main loop: input_get(KEY_ID) → 解析按键 → 修改 ksc_obj_t 属性
                                   ↓
-kscreenupdate() → kdirtyrectmerge() → kobjdraw() → screen_setcolorpixels()
+kscreendraw() → kobjsdraw() → kobjdraw() → screen_setcolorpixels()
 ```
 
 **HAL 责任边界：** KSCOS 定义接口（函数指针），用户/平台负责实现。例如 `k_draw_device.setcolorpixels` 在 PC 上由 EasyX `PutPixels` 实现，在 ARM 上由 `TFT_Setcolors`（SPI/DMA）实现。

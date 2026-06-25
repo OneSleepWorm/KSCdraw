@@ -558,137 +558,26 @@ void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
     default:
         break;
     }
-    obj->_type |= _drawed;
-}
-void kobjdraw_f(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
-    kobjdraw(dev,screen,obj);
-    obj->_type &= ~_drawed;
 }
 
-// 绘制多个对象
 void kobjsdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj,uint8_t num){
     if(!dev || !screen || !obj)return;
     for(uint8_t i=0;i<num;i++){
-        if((obj+i)->_type & _drawed)continue;
+        if(((obj+i)->_type & (_active|_visible)) != (_active|_visible))continue;
         kobjdraw(dev,screen,obj+i);
-    }
-}
-// 绘制多个对象(强制绘制)
-void kobjsdraw_f(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj,uint8_t num){
-    if(!dev || !screen || !obj)return;
-    for(uint8_t i=0;i<num;i++){
-        //if((obj+i)->_type & _drawed)continue;
-        kobjdraw(dev,screen,obj+i);
-    }
-}
-
-void kdirtyrect_add(k_draw_device* dev,KSC_window* screen,uint8_t x,uint8_t y,uint8_t width,uint8_t height){
-    if(!dev || !screen)return;
-    ksc_dirty_rect rect = {x,y,width,height};
-    screen->dirty_rect_buf[screen->dirty_rect_num++] = rect;
-}
-void kdirtyrect_add_obj(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
-    if(!dev || !screen || !obj)return;
-    ksc_dirty_rect rect = {obj->sdx,obj->sdy,obj->width,obj->height};
-    screen->dirty_rect_buf[screen->dirty_rect_num++] = rect;
-}
-
-void kdirtyrect_del(k_draw_device* dev,KSC_window* screen){
-    if(!dev || !screen)return;
-    screen->dirty_rect_num = 0;
-}
-
-static uint8_t kobj_intersects(ksc_obj_t* obj,ksc_dirty_rect* rect){
-    return (obj->sdx < rect->x + rect->width &&
-            obj->sdx + obj->width > rect->x &&
-            obj->sdy < rect->y + rect->height &&
-            obj->sdy + obj->height > rect->y) ? 1 : 0;
-}
-
-
-
-static uint8_t krect_should_merge(ksc_dirty_rect* a,ksc_dirty_rect* b,uint8_t mode){
-    switch(mode){
-    case 1:{
-        uint8_t x = a->x < b->x ? a->x : b->x;
-        uint8_t y = a->y < b->y ? a->y : b->y;
-        uint8_t w = (a->x + a->width > b->x + b->width ? a->x + a->width : b->x + b->width) - x;
-        uint8_t h = (a->y + a->height > b->y + b->height ? a->y + a->height : b->y + b->height) - y;
-        return (uint16_t)w * h <= (uint16_t)a->width * a->height + (uint16_t)b->width * b->height;
-    }
-    case 2:
-    case 3:
-        return (a->x <= b->x + b->width && b->x <= a->x + a->width &&
-                a->y <= b->y + b->height && b->y <= a->y + a->height);
-    default:
-        return 0;
-    }
-}
-
-static ksc_dirty_rect krect_union(ksc_dirty_rect* a,ksc_dirty_rect* b){
-    ksc_dirty_rect r;
-    r.x = a->x < b->x ? a->x : b->x;
-    r.y = a->y < b->y ? a->y : b->y;
-    r.width  = (a->x + a->width  > b->x + b->width  ? a->x + a->width  : b->x + b->width) - r.x;
-    r.height = (a->y + a->height > b->y + b->height ? a->y + a->height : b->y + b->height) - r.y;
-    return r;
-}
-
-void kdirtyrectmerge(k_draw_device* dev,KSC_window* screen,uint8_t mode){
-    if(!dev || !screen)return;
-    if(!screen->dirty_rect_buf || screen->dirty_rect_num < 2)return;
-    if(mode == 0 || mode > 3)return;
-
-    uint8_t passes = (mode == 3) ? 2 : 1;
-    ksc_dirty_rect* buf = screen->dirty_rect_buf;
-
-    for(uint8_t p = 0;p < passes;p++){
-        for(uint8_t i = 0;i < screen->dirty_rect_num;i++){
-            for(uint8_t j = i + 1;j < screen->dirty_rect_num;j++){
-                if(krect_should_merge(&buf[i],&buf[j],mode)){
-                    buf[i] = krect_union(&buf[i],&buf[j]);
-                    screen->dirty_rect_num--;
-                    buf[j] = buf[screen->dirty_rect_num];
-                    j--;
-                }
-            }
-        }
     }
 }
 
 void kscreendraw(k_draw_device* dev,KSC_window* screen){
     if(!dev || !screen)return;
-    //绘制背景
     kfull(dev,screen,screen->bk,0,0,screen->width,screen->height);
-    //绘制对象
-    // printf("objnum=%d\n",screen->objnum);
     kobjsdraw(dev,screen,screen->objbuf,screen->objnum);
 }
 
-//更新屏幕:合并脏矩形+绘制脏矩形+重绘对象+删除脏矩形
-void kscreenupdate(k_draw_device* dev,KSC_window* screen){
-    if(!dev || !screen)return;
-    if(!screen->dirty_rect_num || !screen->objbuf)return;
-    kdirtyrectmerge(dev,screen,screen->Mode);
-    for(uint8_t i=0;i<screen->dirty_rect_num;i++){
-        ksc_dirty_rect* rect = &screen->dirty_rect_buf[i];
 
-        kfull(dev,screen,screen->bk,rect->x,rect->y,rect->width,rect->height);
-
-        for(uint8_t j=0;j<screen->objnum;j++){
-            ksc_obj_t* obj = &screen->objbuf[j];
-            if(kobj_intersects(obj,rect)){
-                obj->_type &= _type_mask;
-            }
-        }
-    }
-
-    kobjsdraw(dev,screen,screen->objbuf,screen->objnum);
-    kdirtyrect_del(dev,screen);
-}
-
-
-/* --- 默认设备屏幕接口 (KSCGUI 接管后仅留空桩) --- */
+/* --- 默认设备屏幕接口 (已由 KSCGUI 接管, 此 stubs 仅保留给 PC 后端) --- */
+/* 注: STM32 上 k_draw_device 的 setcanvas/setcolorpixels 由 kscgui.c
+ *     的 gui_setcanvas/gui_pixels 覆盖, 不会走到这里。 */
 #if __USE_STM32__
 void screen_init(void) { }
 void screen_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height)

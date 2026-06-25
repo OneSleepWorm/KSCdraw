@@ -13,8 +13,8 @@ int main(void)
     sys_init();
     kscprintf("KSCGUI demo start\r\n");
 
-    app_t* gui = appget("KSCGUI2");
-    if (!gui) { kscprintf("FAIL: no KSCGUI2\r\n"); while (1); }
+    app_t* gui = appget("KSCGUI");
+    if (!gui) { kscprintf("FAIL: no KSCGUI\r\n"); while (1); }
     if (appopen(gui) < 0) { kscprintf("FAIL: appopen\r\n"); while (1); }
 
     /*--- init ---*/
