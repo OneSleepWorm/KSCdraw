@@ -563,8 +563,16 @@ void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
 void kobjsdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj,uint8_t num){
     if(!dev || !screen || !obj)return;
     for(uint8_t i=0;i<num;i++){
+        if(((obj+i)->_type & (_active|_dirty)) == (_active|_dirty)){
+            kfull(dev,screen,screen->bk,obj[i].sdx,obj[i].sdy,obj[i].width,obj[i].height);
+        }
+    }
+    for(uint8_t i=0;i<num;i++){
         if(((obj+i)->_type & (_active|_visible)) != (_active|_visible))continue;
         kobjdraw(dev,screen,obj+i);
+    }
+    for(uint8_t i=0;i<num;i++){
+        obj[i]._type &= ~_dirty;
     }
 }
 

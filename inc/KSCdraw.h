@@ -82,8 +82,8 @@ typedef enum KSC_mes{
 #define _flag_mask (0xF0)
 #define _active   (0x80)
 #define _visible  (0x40)
-#define _u0       (0x20)
-#define _u1       (0x10)
+#define _dirty    (0x20)
+#define _u0       (0x10)
 #define _r_mask (0x1F)
 #define _d_mask (0xE0)
 

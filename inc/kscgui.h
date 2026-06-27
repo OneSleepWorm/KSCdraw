@@ -54,7 +54,7 @@
 #define GUI_IBIN(g,x,y,w,h,d,fg,bg) appioctl(g, "ibin", (int)(x),(int)(y),(int)(w),(int)(h),(const uint8_t*)(d),(int)(fg),(int)(bg))
 
 /* --- object system (user-owned ksc_obj_t array) --- */
-#define GUI_SETOBJS(g,n,o)       appioctl(g, "setobjs", (int)(n),(const ksc_obj_t*)(o))
+#define GUI_SETOBJS(g,n,o)       appioctl(g, "setobjs", (int)(n),(ksc_obj_t*)(o))
 #define GUI_DRAWOBJS(g,n)        appioctl(g, "drawobjs", (int)(n))
 #define GUI_DRAWOBJ(g,i)         appioctl(g, "drawobj", (int)(i))
 

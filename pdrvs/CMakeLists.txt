@@ -11,4 +11,5 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/dma.c
     ${CMAKE_CURRENT_SOURCE_DIR}/spi_master.c
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_clock.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/uart_serial.c
 )

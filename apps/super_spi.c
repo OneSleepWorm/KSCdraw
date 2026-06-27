@@ -68,6 +68,10 @@
  *      | 无 DC 控制，用于无 DC 管脚的外设
  * 16   | 数据写入 (DC=0, DMA)     | &buf        | >0, ≤65535
  *      | 无 DC 控制
+ * 17   | 全双工合并收发 (轮询)     | &spi_xfer_t | 1
+ *      | 单循环 tx_buf→mosi, rx_buf←miso, 不碰 CS
+ * 22   | CS low (纯控制, 无 SPI)  | NULL        | 0
+ * 23   | CS high (纯控制, 无 SPI) | NULL        | 0
  * 
  * ============================================================
  * 引脚默认分配
@@ -89,6 +93,23 @@
  * 4. mode=0 始终为 no-op
  * 5. 本文件是 app 层（papp_t），通过 appget/appwrite 调用，
  *    不使用 dd_t/bus_getdriver 接口
+ *
+ * ============================================================
+ * 资源占用 (对比: 移除 super_spi.o 后固件尺寸差值)
+ * ============================================================
+ *   ROM(Debug -O0):   1,936 B
+ *   ROM(Release -Os): ~1,200 B
+ *   RAM(静态):  0 B
+ *   RAM(堆):    4 B (sspi_ctx_t)
+ *
+ * ============================================================
+ * 外部接口
+ * ============================================================
+ *   appget("super_spi1") / appget("super_spi2") → app_t*
+ *   appopen(lcd)    : 打开 SPI+DMA+GPIO (CS/DC/RST 配置为输出)
+ *   appwrite(mode)  : 见 mode 表
+ *   appclose(lcd)   : 关闭外设
+ *   无 appread / appioctl
  */
 
 #include "../inc/app.h"
@@ -132,9 +153,29 @@ static void spi_tx(SPI_TypeDef* spi, const uint8_t* buf, uint32_t len)
     for (uint32_t i = 0; i < len; i++) {
         spi_wait_txe(spi);
         spi->DR = buf[i];
+        while (!(spi->SR & SPI_SR_RXNE));
+        (void)spi->DR;
     }
     spi_wait_bsy(spi);
 }
+
+static void spi_rx(SPI_TypeDef* spi, uint8_t* buf, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++) {
+        spi_wait_txe(spi);
+        spi->DR = 0xFF;
+        while (!(spi->SR & SPI_SR_RXNE));
+        buf[i] = spi->DR;
+    }
+    spi_wait_bsy(spi);
+}
+
+typedef struct {
+    void*   tx_buf;
+    uint16_t tx_len;
+    void*   rx_buf;
+    uint16_t rx_len;
+} spi_xfer_t;
 
 static void dma_wait_tc(uint8_t ch)
 {
@@ -318,6 +359,33 @@ static int sspi_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         sysdelay(100);
         pin_h(gpio, ctx->rst_pin);
         sysdelay(150);
+        return 1;
+    }
+
+    if (mode == 17 && data && count == 1) {
+        spi_xfer_t* x = (spi_xfer_t*)data;
+        uint32_t n = x->tx_len + x->rx_len;
+        if (!n) return 0;
+        for (uint32_t i = 0; i < n; i++) {
+            spi_wait_txe(spi);
+            uint8_t txb = (i < x->tx_len) ? ((uint8_t*)x->tx_buf)[i] : 0xFF;
+            spi->DR = txb;
+            while (!(spi->SR & SPI_SR_RXNE));
+            uint8_t rxb = spi->DR;
+            if (i >= x->tx_len && x->rx_buf)
+                ((uint8_t*)x->rx_buf)[i - x->tx_len] = rxb;
+        }
+        spi_wait_bsy(spi);
+        return 1;
+    }
+
+    if (mode == 22 && !data) {
+        pin_l(gpio, ctx->cs_pin);
+        return 1;
+    }
+
+    if (mode == 23 && !data) {
+        pin_h(gpio, ctx->cs_pin);
         return 1;
     }
 

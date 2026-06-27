@@ -1,3 +1,51 @@
+/**
+ * @file    kscgui.c
+ * @note    GUI Manager App — 封装 KSCdraw 渲染 + ST7789 驱动
+ *
+ * ============================================================
+ * 基本信息
+ * ============================================================
+ * 注册名:  KSCGUI
+ * 依赖:    super_spi1 + super_spi2 (app 依赖)
+ * 平台:    STM32 (__USE_STM32__)
+ *
+ * ============================================================
+ * 资源占用 (对比: 移除 kscgui.o 后固件尺寸差值, 含拉入的 KSCdraw 代码)
+ * ============================================================
+ *   ROM(Debug -O0):   11,896 B
+ *   ROM(Release -Os): 6,888 B
+ *   RAM(静态):  4 B (_ctx 全局指针)
+ *   RAM(堆):    gui_ctx_t (~620 B, 含 pixbuf[512])
+ *
+ * ============================================================
+ * 外部接口
+ * ============================================================
+ *   appget("KSCGUI") → app_t*
+ *   appopen(gui)          : 打开 super_spi 默认 (SPI2→SPI1), 创建默认全屏窗口
+ *   appioctl(gui,"setspi",n) : 切换 SPI 后端 (1=SPI1, 2=SPI2)
+ *   appioctl(gui,"init")     : 发送 ST7789 初始化序列
+ *   appioctl(gui,"wcreate",x,y,w,h,bk) : 创建窗口 → 返回 id
+ *   appioctl(gui,"wdelete",id)         : 删除窗口
+ *   appioctl(gui,"wselect",id)         : 设活动窗口
+ *   appioctl(gui,"wclear")             : 清除活动窗口
+ *   appioctl(gui,"setobjs",n,ptr)      : 注册对象数组
+ *   appioctl(gui,"drawobjs",n)         : 三遍脏渲染
+ *   appioctl(gui,"drawobj",idx)        : 单个对象脏渲染
+ *   绘图: pixel/fill/frect/rect/line/circle/fcircle/arc/
+ *         rrect/frrect/char/string/strcn/image/ibig/ibin
+ *   appclose(gui) : 关闭 SPI, 释放内存
+ *
+ * 典型用法:
+ *   app_t* gui = appget("KSCGUI");
+ *   appopen(gui);
+ *   appioctl(gui, "setspi", 2);
+ *   appioctl(gui, "init");
+ *   int w = appioctl(gui, "wcreate", 0,0,240,320, 0x0000);
+ *   appioctl(gui, "wselect", w);
+ *   appioctl(gui, "fill", 10,10,50,30, 0xF800);
+ *   appclose(gui);
+ */
+
 #include "../inc/app.h"
 #include "../inc/KSCdraw.h"
 #include "../inc/KSCOSsystem.h"
@@ -23,7 +71,7 @@ typedef struct {
     uint8_t         win_count;
     uint8_t         active_win;
     uint8_t         pixbuf[512];
-    const ksc_obj_t* obj_ptr;       /* user-managed object array (setobjs) */
+    ksc_obj_t* obj_ptr;       /* user-managed object array (setobjs) */
     uint16_t        obj_count;      /* total objects in user array */
 } gui_ctx_t;
 
@@ -424,7 +472,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
     /* --- object system --- */
     if (strcmp(cmd, "setobjs") == 0) {
         uint16_t n = (uint16_t)va_arg(ap, int);
-        const ksc_obj_t* objs = va_arg(ap, const ksc_obj_t*);
+        ksc_obj_t* objs = va_arg(ap, ksc_obj_t*);
         ctx->obj_count = n;
         ctx->obj_ptr = objs;
         return 1;
@@ -435,9 +483,18 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         if (!ctx->obj_ptr || ctx->obj_count == 0 || n == 0) return 0;
         if (n > ctx->obj_count) n = ctx->obj_count;
         for (uint16_t i = 0; i < n; i++) {
-            const ksc_obj_t* obj = &ctx->obj_ptr[i];
+            ksc_obj_t* obj = &ctx->obj_ptr[i];
+            if ((obj->_type & (_active|_dirty)) == (_active|_dirty)) {
+                kfull(&ctx->dev, scr, scr->bk, obj->sdx, obj->sdy, obj->width, obj->height);
+            }
+        }
+        for (uint16_t i = 0; i < n; i++) {
+            ksc_obj_t* obj = &ctx->obj_ptr[i];
             if ((obj->_type & (_active|_visible)) != (_active|_visible)) continue;
-            kobjdraw(&ctx->dev, scr, (ksc_obj_t*)obj);
+            kobjdraw(&ctx->dev, scr, obj);
+        }
+        for (uint16_t i = 0; i < n; i++) {
+            ctx->obj_ptr[i]._type &= ~_dirty;
         }
         return 1;
     }
@@ -445,9 +502,14 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
     if (strcmp(cmd, "drawobj") == 0) {
         uint16_t idx = (uint16_t)va_arg(ap, int);
         if (!ctx->obj_ptr || idx >= ctx->obj_count) return 0;
-        const ksc_obj_t* obj = &ctx->obj_ptr[idx];
-        if ((obj->_type & (_active|_visible)) != (_active|_visible)) return 0;
-        kobjdraw(&ctx->dev, scr, (ksc_obj_t*)obj);
+        ksc_obj_t* obj = &ctx->obj_ptr[idx];
+        if (obj->_type & _dirty) {
+            kfull(&ctx->dev, scr, scr->bk, obj->sdx, obj->sdy, obj->width, obj->height);
+            obj->_type &= ~_dirty;
+        }
+        if ((obj->_type & (_active|_visible)) == (_active|_visible)) {
+            kobjdraw(&ctx->dev, scr, obj);
+        }
         return 1;
     }
 

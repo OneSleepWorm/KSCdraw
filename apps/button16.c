@@ -84,6 +84,27 @@
  * 5. 去抖算法: 按下后 HOLD_TICKS(4)=200ms 触发 HOLD,
  *    LONG_TICKS(20)=1000ms 触发 LONG,
  *    DBL_TICKS(8)=400ms 窗口内第二次按下触发 DBLCLICK
+ *
+ * ============================================================
+ * 资源占用 (对比: 移除 button16.o 后固件尺寸差值)
+ * ============================================================
+ *   ROM(Debug -O0):   1,824 B
+ *   ROM(Release -Os): ~965 B
+ *   RAM(静态):  0 B
+ *   RAM(堆):    btn16_data_t (~20 B) + btn16_cpx_t (~150 B) = ~170 B
+ *
+ * ============================================================
+ * 外部接口
+ * ============================================================
+ *   appget("button16") → app_t*
+ *   appopen(kpd)       : 分配数据, 默认启用复杂模式
+ *   appwrite(mode=1)   : 初始化 GPIO (推挽输出+上拉输入)
+ *   appwrite(mode=2)   : 设置扫描间隔并启动 TIM3
+ *   appwrite(mode=4)   : 切换复杂模式 (1=开 0=关)
+ *   appread(mode=1)    : 读 latest_keys (16-bit raw bitmap)
+ *   appread(mode=2)    : 读 interval_ms
+ *   appread(mode=3)    : 弹出一个事件 (复杂模式)
+ *   appclose(kpd)      : 停止扫描, 释放内存
  */
 
 #include "../inc/app.h"
