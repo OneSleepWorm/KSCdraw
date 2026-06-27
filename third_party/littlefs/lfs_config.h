@@ -10,5 +10,4 @@
 #define LFS_ERROR(...)
 #define LFS_TRACE(...)
 #define LFS_ASSERT(test) ((void)0)
-
 #endif

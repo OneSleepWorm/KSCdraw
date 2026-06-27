@@ -13,10 +13,13 @@
  * ============================================================
  * 资源占用
  * ============================================================
- *   ROM(Debug -O0, lfs.c -Os): 24,037 B (app 2,048 + lfs 21,805 + util 184)
- *   ROM(Release -Os):          22,894 B (app 969 + lfs 21,805 + util 120)
- *   RAM(静态):  0 B (.data/.bss 均为 0)
- *   RAM(堆):    ~1,440 B (lfs_ctx_t ~160 + read_buf[512] + prog_buf[512] + lookahead_buf[256])
+ * 差值法: 从 target_sources 中临时移除 littlefs_fs.c + lfs.c + lfs_util.c 测得:
+ *   ROM(Debug -O0, RW):       21,308 B (full 52,504 − baseline 31,196)
+ *   ROM(Debug -O0, RONLY):     9,500 B (full 40,696 − baseline 31,196)
+ *   ROM(Release -Os, RW):     19,692 B (full 38,016 − baseline 18,324)
+ *   ROM(Release -Os, RONLY):   8,572 B (full 26,896 − baseline 18,324)
+ *   RAM(静态): 16 B (.bss 增量, 两配置一致)
+ *   RAM(堆):   ~1,440 B (lfs_ctx_t ~160 + read_buf[512] + prog_buf[512] + lookahead_buf[256])
  *
  * ============================================================
  * 外部接口
@@ -33,18 +36,18 @@
  *
  * appwrite(fs, data, count, mode)
  *   0  — no-op (通用约定)
- *   1  — 格式化. data=NULL, 调用 lfs_format.
+ *   1  — 格式化. data=NULL, 调用 lfs_format. (RONLY 不可用)
  *   2  — 挂载.   data=NULL, 调用 lfs_mount.
  *   3  — 卸载.   data=NULL, 调用 lfs_unmount.
- *   4  — 文件打开. data=lfs_file_op_t*, 返回 lfs_file_open 结果.
- *   5  — 文件关闭. data=lfs_file_t*, 返回 lfs_file_close 结果.
- *   6  — 文件写入. data=lfs_rw_t*, 返回 lfs_file_write 结果.
- *   7  — 文件定位. data=lfs_seek_t*, 返回 lfs_file_seek 结果.
- *   8  — 删除文件. data=path(char*), 返回 lfs_remove 结果.
- *   9  — 重命名.   data=lfs_rename_t*, 返回 lfs_rename 结果.
- *   10 — 创建目录. data=path(char*), 返回 lfs_mkdir 结果.
- *   11 — 目录打开. data=lfs_dir_op_t*, 返回 lfs_dir_open 结果.
- *   12 — 目录关闭. data=lfs_dir_t*, 返回 lfs_dir_close 结果.
+ *   4  — 文件打开. data=lfs_file_op_t*, 返回 lfs_file_open 结果. (RONLY 也可用)
+ *   5  — 文件关闭. data=lfs_file_t*, 返回 lfs_file_close 结果. (RONLY 也可用)
+ *   6  — 文件写入. data=lfs_rw_t*, 返回 lfs_file_write 结果. (RONLY 不可用)
+ *   7  — 文件定位. data=lfs_seek_t*, 返回 lfs_file_seek 结果. (RONLY 不可用)
+ *   8  — 删除文件. data=path(char*), 返回 lfs_remove 结果. (RONLY 不可用)
+ *   9  — 重命名.   data=lfs_rename_t*, 返回 lfs_rename 结果. (RONLY 不可用)
+ *   10 — 创建目录. data=path(char*), 返回 lfs_mkdir 结果. (RONLY 不可用)
+ *   11 — 目录打开. data=lfs_dir_op_t*, 返回 lfs_dir_open 结果. (RONLY 不可用)
+ *   12 — 目录关闭. data=lfs_dir_t*, 返回 lfs_dir_close 结果. (RONLY 不可用)
  *
  * appread(fs, data, count, mode)
  *   0  — no-op (通用约定)
@@ -59,23 +62,24 @@
  *
  *   app_t* fs = appget("littlefs");
  *   appopen(fs);
- *   appwrite(fs, NULL, 0, 1);        // format
+ *   appwrite(fs, NULL, 0, 1);        // format (RONLY 下返回 -1, 忽略)
  *   appwrite(fs, NULL, 0, 2);        // mount
  *
- *   lfs_file_t f;
+ *   lfs_file_t f = {0};
  *   lfs_file_op_t op = {&f, "test.txt", LFS_O_WRONLY | LFS_O_CREAT};
- *   appwrite(fs, &op, 0, 4);         // open
+ *   appwrite(fs, &op, 0, 4);         // open (RONLY 下返回 -1)
  *   lfs_rw_t rw = {&f, "Hello", 5};
- *   appwrite(fs, &rw, 0, 6);         // write
+ *   appwrite(fs, &rw, 0, 6);         // write (RONLY 下返回 -1)
  *   appwrite(fs, &f, 0, 5);          // close
  *
  *   op.flags = LFS_O_RDONLY;
- *   appwrite(fs, &op, 0, 4);         // open
+ *   appwrite(fs, &op, 0, 4);         // open (RONLY 也可用)
  *   char buf[64];
  *   rw.buffer = buf; rw.size = 64;
  *   int n = appread(fs, &rw, 0, 1);  // read
- *   appwrite(fs, &f, 0, 5);          // close
+ *   appwrite(fs, &f, 0, 5);          // close (RONLY 也可用)
  *
+ *   appwrite(fs, NULL, 0, 3);        // unmount
  *   appclose(fs);
  *   appfree(fs);
  *
@@ -84,8 +88,16 @@
  * ============================================================
  * 1. 所有缓冲区由 osmalloc 动态分配, 无全局/静态占用.
  * 2. 必须先 format 再 mount, 或 mount 已 format 的 FS.
- * 3. lfs_file_t 等 littlefs 对象生命周期由用户保证.
+ * 3. lfs_file_t 等 littlefs 对象生命周期由用户保证. RONLY 下将 file 初始化为 {0} 避免断言.
  * 4. W25Q64 block_size=4096, block_count=2048.
+ * 5. RONLY 构建时 lfs.c 的 LFS_ASSERT 会通过 assert() → abort() 导致裸机死循环.
+ *    原因是 lfs.c 的包含链为 lfs.c→lfs.h→lfs_util.h, 从未包含 lfs_config.h,
+ *    默认 LFS_ASSERT=assert() 始终生效. 解决方案:
+ *    CMakeLists.txt 中加 target_compile_definitions(... PRIVATE LFS_NO_ASSERT).
+ *    不要用 LFS_CONFIG=lfs_config.h — 该文件是完整 lfs_util.h 替代品, 缺少
+ *    stdbool.h/lfs_min/lfs_crc 等, 会导致编译失败.
+ * 6. mode 4/5 (file_open/close) 始终可用 (包括 RONLY). mode 1/3/6-12 仅在
+ *    #ifndef LFS_READONLY 中编译, RONLY 下返回 -1.
  */
 
 #include "../inc/app.h"
@@ -114,6 +126,7 @@ static int lfs_bd_read(const struct lfs_config *c, lfs_block_t block,
     return ret < 0 ? LFS_ERR_IO : 0;
 }
 
+#ifndef LFS_READONLY
 static int lfs_bd_prog(const struct lfs_config *c, lfs_block_t block,
                        lfs_off_t off, const void *buffer, lfs_size_t size)
 {
@@ -138,6 +151,7 @@ static int lfs_bd_sync(const struct lfs_config *c)
     (void)c;
     return LFS_ERR_OK;
 }
+#endif
 
 static int lfs_app_open(app_t* app)
 {
@@ -166,9 +180,11 @@ static int lfs_app_open(app_t* app)
     ctx->cfg = (struct lfs_config){
         .context        = ctx,
         .read           = lfs_bd_read,
+#ifndef LFS_READONLY
         .prog           = lfs_bd_prog,
         .erase          = lfs_bd_erase,
         .sync           = lfs_bd_sync,
+#endif
         .read_size      = 256,
         .prog_size      = 256,
         .block_size     = 4096,
@@ -214,10 +230,12 @@ static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     switch (mode) {
     case 0:
         return 0;
+#ifndef LFS_READONLY
     case 1:
         if (ctx->mounted) return -1;
         ret = lfs_format(&ctx->lfs, &ctx->cfg);
         return ret;
+#endif
     case 2:
         if (ctx->mounted) return -1;
         ret = lfs_mount(&ctx->lfs, &ctx->cfg);
@@ -239,6 +257,7 @@ static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         if (!ctx->mounted || !data) return -1;
         ret = lfs_file_close(&ctx->lfs, (lfs_file_t*)data);
         return ret;
+#ifndef LFS_READONLY
     case 6:
         if (!ctx->mounted || !data) return -1;
     {
@@ -279,6 +298,7 @@ static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         if (!ctx->mounted || !data) return -1;
         ret = lfs_dir_close(&ctx->lfs, (lfs_dir_t*)data);
         return ret;
+#endif
     default:
         return -1;
     }
