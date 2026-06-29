@@ -1,7 +1,11 @@
 #include "../inc/KSCOSsystem.h"
 #include "stdlib.h"
 
-dd_t* ksc_console = NULL;
+#if __USE_STM32__
+app_t* ksc_console = NULL;
+#else
+dd_t*  ksc_console = NULL;
+#endif
 dd_t* ksc_timer = NULL;
 
 void* osmalloc(size_t size)
@@ -27,8 +31,17 @@ void sys_init(void)
     ksc_timer = bus_getdriver("sys_time");
     if (ksc_timer) ddopen(ksc_timer);
 
+#if __USE_STM32__
+    ksc_console = appget("uart_serial");
+    if (ksc_console) {
+        ksc_console->user_data = (void*)1;
+        appopen(ksc_console);
+        appwrite(ksc_console, NULL, 0, 0x14);
+    }
+#else
     ksc_console = bus_getdriver(KSC_CONSOLE_DRIVER);
     if (ksc_console) ddopen(ksc_console);
+#endif
 }
 
 #if __USE_STM32__

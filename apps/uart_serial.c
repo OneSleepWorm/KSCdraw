@@ -1,0 +1,231 @@
+#include "../inc/app.h"
+#include "../inc/KSCOSsystem.h"
+#if __USE_STM32__
+#include "stm32f1xx.h"
+#include <stdio.h>
+
+#define UART_RX_BUF_SIZE  256
+
+typedef struct {
+    volatile uint8_t  buf[UART_RX_BUF_SIZE];
+    volatile uint16_t head, tail;
+} uart_rx_ring_t;
+
+typedef struct {
+    uint8_t          enabled;       /* bit0=USART1 bit1=USART2 bit2=USART3 */
+    uint8_t          dflt_inst;     /* ioctl 默认实例 */
+    uart_rx_ring_t*  ring[3];
+    app_t*           owner[3];      /* ISR 反向查找 app_t */
+} uart_ctx_t;
+
+static app_t* uart_owners[4];
+
+static USART_TypeDef* uart_reg(uint8_t inst)
+{
+    static USART_TypeDef* const map[] = {USART1, USART2, USART3};
+    if (inst < 1 || inst > 3) return NULL;
+    return map[inst - 1];
+}
+
+static const IRQn_Type irq_map[] = {USART1_IRQn, USART2_IRQn, USART3_IRQn};
+
+static const uint16_t brr_tbl[] = {625, 312, 312};
+static const uint32_t tx_pin[]  = {9, 2, 26};
+static const uint32_t rx_pin[]  = {10, 3, 27};
+
+static void rcc_enable(uint8_t inst)
+{
+    if (inst == 1) {
+        RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+    } else if (inst == 2) {
+        RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
+    } else {
+        RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
+    }
+    (void)RCC->APB2ENR;
+}
+
+static void inst_init(app_t* app, uint8_t inst)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx) return;
+    uint8_t bit = 1 << (inst - 1);
+    if (ctx->enabled & bit) return;
+
+    ctx->ring[inst - 1] = osmalloc(sizeof(uart_rx_ring_t));
+    if (!ctx->ring[inst - 1]) return;
+    ctx->ring[inst - 1]->head = 0;
+    ctx->ring[inst - 1]->tail = 0;
+
+    rcc_enable(inst);
+
+    if (app->app0) appopen(app->app0);
+
+    appwrite(app->app0, NULL, (tx_pin[inst - 1] << 4) | 0xB, 1);
+    appwrite(app->app0, NULL, (rx_pin[inst - 1] << 4) | 0x4, 1);
+
+    USART_TypeDef* uart = uart_reg(inst);
+    uart->BRR = brr_tbl[inst - 1];
+    uart->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
+
+    NVIC_SetPriority(irq_map[inst - 1], 0);
+    NVIC_EnableIRQ(irq_map[inst - 1]);
+
+    ctx->owner[inst - 1] = app;
+    uart_owners[inst] = app;
+    ctx->enabled |= bit;
+}
+
+static int uart_app_open(app_t* app)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)osmalloc(sizeof(uart_ctx_t));
+    if (!ctx) return -1;
+    ctx->enabled    = 0;
+    ctx->dflt_inst  = 1;
+    for (int i = 0; i < 3; i++) ctx->ring[i] = NULL;
+    for (int i = 0; i < 3; i++) ctx->owner[i] = NULL;
+    app->app_data = ctx;
+    return 0;
+}
+
+static int uart_app_close(app_t* app)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    for (int i = 0; i < 3; i++) {
+        if (ctx->enabled & (1 << i)) {
+            USART_TypeDef* uart = uart_reg(i + 1);
+            if (uart) uart->CR1 &= ~(USART_CR1_UE | USART_CR1_RXNEIE);
+            NVIC_DisableIRQ(irq_map[i]);
+            uart_owners[i + 1] = NULL;
+        }
+        if (ctx->ring[i]) osfree(ctx->ring[i]);
+    }
+    osfree(ctx);
+    app->app_data = NULL;
+    return 0;
+}
+
+static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+
+    if (mode == 0x05) {
+        if (count >= 1 && count <= 3) ctx->dflt_inst = (uint8_t)count;
+        return 1;
+    }
+
+    uint32_t inst = mode >> 4;
+    uint32_t op   = mode & 0x0F;
+    if (inst < 1 || inst > 3) return -1;
+
+    inst_init(app, (uint8_t)inst);
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+
+    USART_TypeDef* uart = uart_reg((uint8_t)inst);
+
+    switch (op) {
+    case 0:
+        return 1;
+
+    case 1: {
+        uint8_t* p = (uint8_t*)data;
+        for (uint32_t i = 0; i < count; i++) {
+            while (!(uart->SR & USART_SR_TXE));
+            uart->DR = p[i];
+        }
+        return (int)count;
+    }
+
+    case 2:
+        if (count)
+            uart->CR1 |= USART_CR1_RXNEIE;
+        else
+            uart->CR1 &= ~USART_CR1_RXNEIE;
+        return 1;
+
+    case 4:
+        return 1;
+
+    default:
+        return -1;
+    }
+}
+
+static int uart_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx || !data || !count) return 0;
+
+    uint32_t inst = mode;
+    if (inst < 1 || inst > 3) return 0;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return 0;
+
+    uart_rx_ring_t* r = ctx->ring[inst - 1];
+    uint32_t read = 0;
+    while (read < count && r->head != r->tail) {
+        ((uint8_t*)data)[read++] = r->buf[r->tail];
+        r->tail = (uint16_t)((r->tail + 1) & (UART_RX_BUF_SIZE - 1));
+    }
+    return (int)read;
+}
+
+static int uart_app_ioctl(app_t* app, const char* fmt, va_list ap)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+
+    uint8_t inst = ctx->dflt_inst;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+
+    USART_TypeDef* uart = uart_reg(inst);
+    char buf[128];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    if (n > 0) {
+        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+        for (size_t i = 0; i < len; i++) {
+            while (!(uart->SR & USART_SR_TXE));
+            uart->DR = (uint8_t)buf[i];
+        }
+    }
+    return n;
+}
+
+static const papp_ops_t uart_serial_ops = {
+    .open  = uart_app_open,
+    .close = uart_app_close,
+    .write = uart_app_write,
+    .read  = uart_app_read,
+    .ioctl = uart_app_ioctl,
+};
+
+REGISTER_APP_EX("uart_serial", "0", "1\0gpio_port", &uart_serial_ops,
+    "Unified UART serial app (USART1/2/3)");
+
+static void uart_irq_handler(int idx)
+{
+    app_t* app = uart_owners[idx + 1];
+    if (!app) return;
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!ctx) return;
+
+    USART_TypeDef* uart = uart_reg(idx + 1);
+    if (uart->SR & USART_SR_RXNE) {
+        uint8_t c = (uint8_t)uart->DR;
+        uart_rx_ring_t* r = ctx->ring[idx];
+        if (r) {
+            uint16_t next = (uint16_t)((r->head + 1) & (UART_RX_BUF_SIZE - 1));
+            if (next != r->tail) {
+                r->buf[r->head] = c;
+                r->head = next;
+            }
+        }
+    }
+}
+
+void USART1_IRQHandler(void) { uart_irq_handler(0); }
+void USART2_IRQHandler(void) { uart_irq_handler(1); }
+void USART3_IRQHandler(void) { uart_irq_handler(2); }
+
+#endif

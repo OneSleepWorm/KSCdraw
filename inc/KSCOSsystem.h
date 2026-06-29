@@ -10,11 +10,18 @@
 #define KSCOS_HIGH_CLOCK 2
 
 extern __volatile uint32_t KSCOSsystem_Clock;
-extern dd_t* ksc_console;
 extern dd_t* ksc_timer;
 
+#if __USE_STM32__
+#include "app.h"
+extern app_t* ksc_console;
+#define kscprintf(fmt, ...) \
+    do { if (ksc_console) appioctl(ksc_console, fmt, ##__VA_ARGS__); } while(0)
+#else
+extern dd_t* ksc_console;
 #define kscprintf(fmt, ...) \
     do { if (ksc_console) ddioctl(ksc_console, fmt, ##__VA_ARGS__); } while(0)
+#endif
 #define kscdelay(ms) \
     do { if (ksc_timer) ddwrite(ksc_timer, NULL, ms, 1); } while(0)
 #define kscgettime() \

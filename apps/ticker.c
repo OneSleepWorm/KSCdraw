@@ -6,7 +6,7 @@
  * 基本信息
  * ============================================================
  * 注册名:  ticker
- * 依赖:    tim_clock_2 + uart_printf_1
+ * 依赖:    tim_clock (app) + uart_serial (app0)
  * 平台:    STM32 (__USE_STM32__)
  * 
  * ============================================================
@@ -65,24 +65,25 @@ static void* ticker_cb(void* data)
 {
     app_t* app = (app_t*)data;
     uint32_t t = sysgettime();
-    ddioctl(app->dd1, "[%lu] tick\r\n", t);
+    appioctl(app->app0, "[%lu] tick\r\n", t);
     return NULL;
 }
 
 static int ticker_open(app_t* app)
 {
-    ddopen(app->dd1);
-    app->dd0->callback = ticker_cb;
-    app->dd0->user_data = app;
-    ddopen(app->dd0);
-    ddwrite(app->dd0, NULL, 1000, 0);
-    ddwrite(app->dd0, NULL, 1,    1);
+    app_t* tim = appget("tim_clock");
+    tim->callback = ticker_cb;
+    tim->user_data = app;
+    appopen(tim);
+    appwrite(tim, NULL, 1000, 0x21);
+    appwrite(tim, NULL, 1,    0x22);
     return 0;
 }
 
 static int ticker_close(app_t* app)
 {
-    ddwrite(app->dd0, NULL, 0, 1);
+    app_t* tim = appget("tim_clock");
+    appwrite(tim, NULL, 0, 0x22);
     return 0;
 }
 
@@ -91,7 +92,7 @@ static const papp_ops_t ticker_ops = {
     .close = ticker_close,
 };
 
-REGISTER_APP("ticker", "2\0tim_clock_2\0uart_printf_1",
-             &ticker_ops, "Periodic timestamp via UART");
+REGISTER_APP_EX("ticker", "0", "1\0uart_serial",
+                &ticker_ops, "Periodic timestamp via UART");
 
 #endif

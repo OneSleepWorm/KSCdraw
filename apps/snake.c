@@ -6,7 +6,7 @@
  * 基本信息
  * ============================================================
  * 注册名:  snake
- * 依赖:    KSCGUI + button16 + tim_clock_4
+ * 依赖:    KSCGUI + button16 + tim_clock
  * 平台:    STM32 (__USE_STM32__)
  *
  * 资源占用 (对比: 移除 snake.o 后固件尺寸差值):
@@ -81,7 +81,7 @@ typedef struct { uint8_t x, y; } pos_t;
 typedef struct {
     app_t*  obj;
     app_t*  kpd;
-    dd_t*   tmr;
+    app_t*  tim;
 
     ksc_obj_t objs[OBJ_TOTAL];
     char      score_buf[16];
@@ -303,7 +303,7 @@ static void* tick_cb(void* data)
         /* K0 退出: 停止 TIM4, mode=2 时上层通过 appread 感知 */
         if (key == 0) {
             ctx->running = 0;
-            ddwrite(ctx->tmr, NULL, 0, 2);
+            appwrite(ctx->tim, NULL, 0, 0x42);
             return NULL;
         }
 
@@ -364,7 +364,7 @@ static int snake_open(app_t* app)
     memset(ctx, 0, sizeof(snake_ctx_t));
     ctx->obj = app->app0;
     ctx->kpd = app->app1;
-    ctx->tmr = app->dd0;
+    ctx->tim = appget("tim_clock");
     app->app_data = ctx;
     return 0;
 }
@@ -375,9 +375,9 @@ static int snake_close(app_t* app)
     if (!ctx) return 0;
     ctx->running = 0;
     if (ctx->hw_opened) {
-        ddwrite(ctx->tmr, NULL, 0, 2);  /* stop TIM4 */
-        appclose(ctx->kpd);              /* stops TIM3, frees keypad */
-        appclose(ctx->obj);              /* closes SPI */
+        appwrite(ctx->tim, NULL, 0, 0x42);  /* stop TIM4 */
+        appclose(ctx->kpd);                  /* stops TIM3, frees keypad */
+        appclose(ctx->obj);                  /* closes SPI */
     }
     osfree(ctx);
     app->app_data = NULL;
@@ -407,12 +407,12 @@ static int snake_init(app_t* app, int mode)
     appioctl(ctx->obj, "setobjs", (int)OBJ_TOTAL, ctx->objs);
     show_initial(ctx);
 
-    /* TIM4: mode=1 设周期, mode=2 count=1 启动 */
-    ctx->tmr->callback  = tick_cb;
-    ctx->tmr->user_data = app;
-    ddopen(ctx->tmr);
-    ddwrite(ctx->tmr, NULL, TICK_MS, 1);
-    ddwrite(ctx->tmr, NULL, 1,      2);
+    /* TIM4: mode=0x41 设周期, mode=0x42 count=1 启动 */
+    ctx->tim->callback  = tick_cb;
+    ctx->tim->user_data = app;
+    appopen(ctx->tim);
+    appwrite(ctx->tim, NULL, TICK_MS, 0x41);
+    appwrite(ctx->tim, NULL, 1,      0x42);
 
     ctx->hw_opened = 1;
     ctx->running   = 1;
@@ -458,8 +458,8 @@ static const papp_ops_t snake_ops = {
     .ioctl  = snake_ioctl,
 };
 
-/* dep: tim_clock_4(dd0), app_dep: KSCGUI(app0), button16(app1) */
-REGISTER_APP_EX("snake", "1\0tim_clock_4", "2\0KSCGUI\0button16",
+/* dep: none (tim_clock managed internally), app_dep: KSCGUI(app0), button16(app1) */
+REGISTER_APP_EX("snake", "0", "2\0KSCGUI\0button16",
                 &snake_ops, "Snake Game (interrupt-driven, incremental)");
 
 #endif

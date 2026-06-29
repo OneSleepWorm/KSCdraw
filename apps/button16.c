@@ -6,7 +6,7 @@
  * 基本信息
  * ============================================================
  * 注册名:  button16
- * 依赖:    gpio_port_a + tim_clock_3
+ * 依赖:    gpio_port (app) + tim_clock (app)
  * 平台:    STM32 (__USE_STM32__)
  * 
  * ============================================================
@@ -179,15 +179,15 @@ static uint32_t ev_pop(btn16_cpx_t* c)
     return ev;
 }
 
-static uint32_t keypad_scan(dd_t* gpio)
+static uint32_t keypad_scan(app_t* gpio)
 {
     uint32_t raw = 0;
     for (int row = 0; row < 4; row++) {
         uint32_t set = 1 << row;
-        ddwrite(gpio, &set, 0x0F, 3);
-        uint32_t col;
-        ddread(gpio, &col, 0xF0, 1);
-        raw |= ((col >> 4) & 0x0F) << (row * 4);
+        appwrite(gpio, &set, 0x0F, 3);
+        uint32_t idr;
+        appread(gpio, &idr, 0, 1);
+        raw |= ((idr >> 4) & 0x0F) << (row * 4);
     }
     return raw;
 }
@@ -198,7 +198,7 @@ static void* scan_cb(void* data)
     btn16_data_t* d = (btn16_data_t*)app->app_data;
     if (!d->hw_inited) return NULL;
 
-    uint32_t raw = keypad_scan(app->dd0);
+    uint32_t raw = keypad_scan(app->app0);
 
     if (d->complex_mode && d->cpx) {
         btn16_cpx_t* c = d->cpx;
@@ -275,8 +275,10 @@ static int btn16_open(app_t* app)
 static int btn16_close(app_t* app)
 {
     btn16_data_t* d = (btn16_data_t*)app->app_data;
-    if (d->timer_started)
-        ddwrite(app->dd1, NULL, 0, 2);
+    if (d->timer_started) {
+        app_t* tim = appget("tim_clock");
+        appwrite(tim, NULL, 0, 0x32);
+    }
     if (d->cpx) osfree(d->cpx);
     if (app->app_data) osfree(app->app_data);
     return 0;
@@ -307,14 +309,15 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     btn16_data_t* d = (btn16_data_t*)app->app_data;
     if (mode == 1 && !d->hw_inited) {
-        ddopen(app->dd0);
+        if (app->app0) appopen(app->app0);
         for (int p = 0; p < 8; p++) {
             uint32_t nib = (p < 4) ? 0x3 : 0x8;
-            ddwrite(app->dd0, NULL, (p << 4) | nib, 1);
+            appwrite(app->app0, NULL, (p << 4) | nib, 1);
         }
         uint32_t zero = 0;
-        ddwrite(app->dd0, &zero, 0x00FF, 3);
-        uint32_t raw = keypad_scan(app->dd0);
+        appwrite(app->app0, &zero, 0x00FF, 3);
+        kscprintf("button16: gpio_port init done, PORTA pins 0-7\r\n");
+        uint32_t raw = keypad_scan(app->app0);
         d->latest_keys = raw;
         if (d->cpx) d->cpx->prev_raw = raw;
         d->hw_inited = 1;
@@ -322,11 +325,12 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     }
     if (mode == 2 && !d->timer_started && data && count == 1) {
         d->interval_ms = *(uint32_t*)data;
-        app->dd1->callback  = scan_cb;
-        app->dd1->user_data = app;
-        ddopen(app->dd1);
-        ddwrite(app->dd1, NULL, d->interval_ms, 1);
-        ddwrite(app->dd1, NULL, 1, 2);
+        app_t* tim = appget("tim_clock");
+        tim->callback  = scan_cb;
+        tim->user_data = app;
+        appopen(tim);
+        appwrite(tim, NULL, d->interval_ms, 0x31);
+        appwrite(tim, NULL, 1, 0x32);
         d->timer_started = 1;
         return 1;
     }
@@ -337,7 +341,7 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
             if (d->cpx) {
                 memset(d->cpx, 0, sizeof(btn16_cpx_t));
                 d->complex_mode = 1;
-                uint32_t raw = keypad_scan(app->dd0);
+    uint32_t raw = keypad_scan(app->app0);
                 d->latest_keys = raw;
                 d->cpx->prev_raw = raw;
             }
@@ -358,7 +362,7 @@ static const papp_ops_t btn16_ops = {
     .write = btn16_write,
 };
 
-REGISTER_APP("button16", "2\0gpio_port_a\0tim_clock_3",
-             &btn16_ops, "4x4 matrix keypad scanner");
+REGISTER_APP_EX("button16", "0", "1\0gpio_port",
+                &btn16_ops, "4x4 matrix keypad scanner");
 
 #endif
