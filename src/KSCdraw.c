@@ -282,6 +282,7 @@ KSC_mes kfillbox(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy x
     return kfull(dev,screen, color, x1, y1, w, height);
 }
 
+#if __DRAW_CIRCLE__
 KSC_mes karc(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy x0, uintxy y0, uint8_t r, uint8_t Anglediraction){
     if (!screen) return KSC_ERR;
     if ((Anglediraction & 0xF0) != 0) return KSC_ERR;
@@ -365,6 +366,8 @@ KSC_mes kfillcircle(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintx
     return KSC_OK;
 }
 
+#endif /* __DRAW_CIRCLE__ */
+
 KSC_mes kdrawimage(k_draw_device* dev,KSC_window* screen, const uint16_t* img, uintxy x, uintxy y,
     uint8_t width, uint8_t height){
     if (!screen || !img) return KSC_ERR;
@@ -388,6 +391,7 @@ KSC_mes kdrawimagebig(k_draw_device* dev,KSC_window* screen, const uint16_t* img
     return KSC_OK;
 }
 
+#if __DRAW_CIRCLE__
 KSC_mes kroundrect(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy x1, uintxy y1, uintxy width, uintxy height, uint8_t r){
     if (!screen) return KSC_ERR;
     if (r == 0){
@@ -437,6 +441,8 @@ KSC_mes kfillroundrect(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, ui
     kfillcircle(dev,screen, color, x2 - r, y2 - r, r);
     return KSC_OK;
 }
+
+#endif /* __DRAW_CIRCLE__ */
 
 KSC_mes kimagebin(k_draw_device* dev,KSC_window* screen, const uint8_t* img, uintxy x, uintxy y,
     uint8_t width, uint8_t height, KSCCOLOR colorck, KSCCOLOR colorbk){
@@ -500,12 +506,14 @@ void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
     //printf("obj->_type=%02X\n",obj->_type);
     switch (obj->_type&_type_mask)
     {
+#if __DRAW_CIRCLE__
     case _circle: {
         /* code */
         uint8_t r = obj->d_and_r&_r_mask;
         kcircle(dev,screen,obj->colorck,obj->sdx+r,obj->sdy+r,r);
         break;
     }
+#endif
     case _box:
         /* code */
         kbox(dev,screen,obj->colorck,obj->sdx,obj->sdy,obj->width,obj->height);
@@ -529,16 +537,19 @@ void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
         kline(dev,screen,obj->colorck,obj->sdx,obj->sdy
             ,obj->width,obj->height);
         break;
+#if __DRAW_CIRCLE__
     case _fillcircle: {
         /* code */
         uint8_t r = obj->d_and_r&_r_mask;
         kfillcircle(dev,screen,obj->colorck,obj->sdx+r,obj->sdy+r,r);
         break;
     }
+#endif
     case _fillbox:
         /* code */
         kfillbox(dev,screen,obj->colorck,obj->sdx,obj->sdy,obj->width,obj->height);
         break;
+#if __DRAW_CIRCLE__
     case _roundrect: {
         /* code */
         uint8_t r = obj->d_and_r&_r_mask;
@@ -551,6 +562,7 @@ void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
         kfillroundrect(dev,screen,obj->colorck,obj->sdx,obj->sdy
             ,obj->width,obj->height,obj->d_and_r&_r_mask);
         break;
+#endif
     case _char:
         /* code */
         kchar(dev,screen,*(char*)(obj->data),obj->sdx,obj->sdy,obj->colorck,screen->bk);

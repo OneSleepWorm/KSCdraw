@@ -79,7 +79,7 @@ enum { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
 typedef struct { uint8_t x, y; } pos_t;
 
 typedef struct {
-    app_t*  gui;
+    app_t*  obj;
     app_t*  kpd;
     dd_t*   tmr;
 
@@ -278,11 +278,11 @@ static void show_initial(snake_ctx_t* ctx)
 {
     /* pass 1: 全量擦除 + 画静态元素 (墙/分数) */
     render_full_reset(ctx);
-    appioctl(ctx->gui, "drawobjs", (int)OBJ_TOTAL);
+    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
 
     /* pass 2: 画蛇/食物 (首帧, 无擦除器) */
     render(ctx, 0, 1);
-    appioctl(ctx->gui, "drawobjs", (int)OBJ_TOTAL);
+    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
 }
 
 /* ── TIM4 中断回调 ── */
@@ -311,7 +311,7 @@ static void* tick_cb(void* data)
         if (ctx->game_over) {
             init_game(ctx);
             init_objects(ctx);
-            appioctl(ctx->gui, "setobjs", (int)OBJ_TOTAL, ctx->objs);
+            appioctl(ctx->obj, "setobjs", (int)OBJ_TOTAL, ctx->objs);
             show_initial(ctx);
             return NULL;
         }
@@ -322,9 +322,9 @@ static void* tick_cb(void* data)
             if (!ctx->paused) {
                 /* 取消暂停: 全量擦除后重绘 (PAUSED 文字不再残留) */
                 render_full_reset(ctx);
-                appioctl(ctx->gui, "drawobjs", (int)OBJ_TOTAL);
+                appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
                 render(ctx, 0, 1);
-                appioctl(ctx->gui, "drawobjs", (int)OBJ_TOTAL);
+                appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
                 return NULL;
             }
             continue;
@@ -351,7 +351,7 @@ static void* tick_cb(void* data)
         render(ctx, 0, 0);
     }
 
-    appioctl(ctx->gui, "drawobjs", (int)OBJ_TOTAL);
+    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
     return NULL;
 }
 
@@ -362,7 +362,7 @@ static int snake_open(app_t* app)
     snake_ctx_t* ctx = (snake_ctx_t*)osmalloc(sizeof(snake_ctx_t));
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(snake_ctx_t));
-    ctx->gui = app->app0;
+    ctx->obj = app->app0;
     ctx->kpd = app->app1;
     ctx->tmr = app->dd0;
     app->app_data = ctx;
@@ -377,7 +377,7 @@ static int snake_close(app_t* app)
     if (ctx->hw_opened) {
         ddwrite(ctx->tmr, NULL, 0, 2);  /* stop TIM4 */
         appclose(ctx->kpd);              /* stops TIM3, frees keypad */
-        appclose(ctx->gui);              /* closes SPI */
+        appclose(ctx->obj);              /* closes SPI */
     }
     osfree(ctx);
     app->app_data = NULL;
@@ -389,22 +389,22 @@ static int snake_init(app_t* app, int mode)
     snake_ctx_t* ctx = (snake_ctx_t*)app->app_data;
     if (ctx->hw_opened) return -1;
 
-    /* KSCGUI */
-    if (appopen(ctx->gui) < 0) return -1;
-    appioctl(ctx->gui, "init");
+    /* GUI */
+    if (appopen(ctx->obj) < 0) return -1;
+    appioctl(ctx->obj, "init");
     sysdelay(10);
-    int win = appioctl(ctx->gui, "wcreate", 0, 0, 240, 320, 0x0000);
-    appioctl(ctx->gui, "wselect", win);
+    int win = appioctl(ctx->obj, "wcreate", 0, 0, 240, 320, 0x0000);
+    appioctl(ctx->obj, "wselect", win);
 
     /* button16 */
-    if (appopen(ctx->kpd) < 0) { appclose(ctx->gui); return -1; }
+    if (appopen(ctx->kpd) < 0) { appclose(ctx->obj); return -1; }
     appwrite(ctx->kpd, NULL, 0, 1);
     { uint32_t iv = SCAN_MS; appwrite(ctx->kpd, &iv, 1, 2); }
 
     /* 游戏初始化 + 首次绘制 */
     init_game(ctx);
     init_objects(ctx);
-    appioctl(ctx->gui, "setobjs", (int)OBJ_TOTAL, ctx->objs);
+    appioctl(ctx->obj, "setobjs", (int)OBJ_TOTAL, ctx->objs);
     show_initial(ctx);
 
     /* TIM4: mode=1 设周期, mode=2 count=1 启动 */

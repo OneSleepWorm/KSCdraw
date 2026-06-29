@@ -13,6 +13,7 @@
 #define __USE_LCD__ 1
 #define __USE_CLOCK_TASK__ 1
 #define __USE_CHINESE__ 0
+#define __DRAW_CIRCLE__ 1   // 圆形/圆弧/圆角矩形 (karc/kcircle/kfillcircle/kroundrect/kfillroundrect)
 #define __USE_FLASH__ 1
 #define __USE_UART__ 0
 #define __USE_LITTLEFS__ 1
@@ -46,7 +47,7 @@ typedef uint16_t ku16;
 typedef int8_t ki8;
 typedef int16_t ki16;
 //data config
-#define SYSTEMFONT 8
+#define SYSTEMFONT 7
 #define SYSTEMCHINESEFONT 16
 
 #define SYSTEMCOLOR0 0xFFFF

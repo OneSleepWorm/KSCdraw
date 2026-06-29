@@ -12,10 +12,26 @@
  * ============================================================
  * 资源占用 (对比: 移除 kscgui.o 后固件尺寸差值, 含拉入的 KSCdraw 代码)
  * ============================================================
- *   ROM(Debug -O0):   11,896 B
- *   ROM(Release -Os): 6,888 B
+ *   ROM(Debug -O0):  11,896 B (__DRAW_CIRCLE__=1) / 9,064 B (=0)  [†]
+ *   ROM(Release -Os): 6,464 B (__DRAW_CIRCLE__=1) / 5,008 B (=0)  [†]
  *   RAM(静态):  4 B (_ctx 全局指针)
  *   RAM(堆):    gui_ctx_t (~620 B, 含 pixbuf[512])
+ *
+ *   [†] 实测方式: 从 CMakeLists.txt target_sources 临时移除 kscgui.c,
+ *       对比带/不带此文件的固件 FLASH 差值。基线含所有其他源文件。全部实测值:
+ *       CIRCLE=1  Debug  52,088 B → baseline 40,192 B = +11,896 B
+ *       CIRCLE=1  Release 37,696 B → baseline 31,232 B = +6,464 B
+ *       CIRCLE=0  Debug  49,256 B → baseline 40,192 B = +9,064 B
+ *       CIRCLE=0  Release 36,240 B → baseline 31,232 B = +5,008 B
+ *
+ * ============================================================
+ * 可裁剪功能 (KSCconfig.h)
+ * ============================================================
+ *   __DRAW_CIRCLE__ (默认 1):
+ *     设为 0 可移除 circle/fcircle/arc/rrect/frrect 相关代码。
+ *     影响: karc/kcircle/kfillcircle/kroundrect/kfillroundrect
+ *     + kscgui 中对应 5 个 ioctl + kobjdraw 中 4 个 case。
+ *     Release -Os 实测省 Flash = 1,456 B (37,696 → 36,240 B)。
  *
  * ============================================================
  * 外部接口
@@ -31,8 +47,8 @@
  *   appioctl(gui,"setobjs",n,ptr)      : 注册对象数组
  *   appioctl(gui,"drawobjs",n)         : 三遍脏渲染
  *   appioctl(gui,"drawobj",idx)        : 单个对象脏渲染
- *   绘图: pixel/fill/frect/rect/line/circle/fcircle/arc/
- *         rrect/frrect/char/string/strcn/image/ibig/ibin
+ *   绘图 (__DRAW_CIRCLE__=0 时 circle/fcircle/arc/rrect/frrect 不可用):
+ *     pixel/fill/frect/rect/line/char/string/strcn/image/ibig/ibin
  *   appclose(gui) : 关闭 SPI, 释放内存
  *
  * 典型用法:
@@ -329,6 +345,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         return 1;
     }
 
+#if __DRAW_CIRCLE__
     if (strcmp(cmd, "circle") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -346,6 +363,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         kfillcircle(&ctx->dev, scr, c, x, y, r);
         return 1;
     }
+#endif
 
     if (strcmp(cmd, "line") == 0) {
         uint16_t x0 = (uint16_t)va_arg(ap, int);
@@ -357,6 +375,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         return 1;
     }
 
+#if __DRAW_CIRCLE__
     if (strcmp(cmd, "arc") == 0) {
         uint16_t x = (uint16_t)va_arg(ap, int);
         uint16_t y = (uint16_t)va_arg(ap, int);
@@ -388,6 +407,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         kfillroundrect(&ctx->dev, scr, c, x, y, w, h, r);
         return 1;
     }
+#endif
 
     if (strcmp(cmd, "char") == 0) {
         uint16_t x  = (uint16_t)va_arg(ap, int);
