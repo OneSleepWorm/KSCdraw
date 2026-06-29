@@ -3,6 +3,36 @@
 #include "../inc/KSCOSsystem.h"
 #include "string.h"
 
+/* ================================================================
+ * 应用缓存 — 单例 + 引用计数
+ * ================================================================ */
+#define APP_STATE_OPENED  (0x01)
+
+typedef struct app_cache_node {
+    app_t*   app;
+    int      get_refs;          /* appget 调用次数, 未 appfree */
+    uint8_t  app_state;         /* bit0=opened, bit1=reserved */
+    struct app_cache_node* next;
+} app_cache_node_t;
+
+static app_cache_node_t* _app_cache = NULL;
+
+static app_cache_node_t* cache_find(const char* name)
+{
+    for (app_cache_node_t* p = _app_cache; p; p = p->next)
+        if (strcmp(p->app->papp->base->app_name, name) == 0)
+            return p;
+    return NULL;
+}
+
+static app_cache_node_t* cache_find_by_app(const app_t* app)
+{
+    for (app_cache_node_t* p = _app_cache; p; p = p->next)
+        if (p->app == app)
+            return p;
+    return NULL;
+}
+
 static int resolve_deps(const char* dep_str, dd_t** slots)
 {
     if (!dep_str || !dep_str[0] || dep_str[0] == '0') return 0;
@@ -39,10 +69,22 @@ static int resolve_app_deps(const char* app_dep_str, app_t** slots)
     return j;
 }
 
+/* ================================================================
+ * 公共 API
+ * ================================================================ */
+
 app_t* appget(const char* name)
 {
     if (!name) return NULL;
 
+    /* 1. 查缓存 */
+    app_cache_node_t* node = cache_find(name);
+    if (node) {
+        node->get_refs++;
+        return node->app;
+    }
+
+    /* 2. 查 papp 表 */
     size_t app_count = ((const char*)__stop_papp_table - (const char*)__start_papp_table) / sizeof(papp_t);
 
     for (size_t i = 0; i < app_count; i++) {
@@ -87,6 +129,15 @@ app_t* appget(const char* name)
             app->app2 = appslots[2]; app->app3 = appslots[3];
         }
 
+        /* 3. 入缓存链表 */
+        node = (app_cache_node_t*)osmalloc(sizeof(app_cache_node_t));
+        if (!node) { osfree(app); return NULL; }
+        node->app       = app;
+        node->get_refs  = 1;
+        node->app_state = 0;
+        node->next      = _app_cache;
+        _app_cache      = node;
+
         return app;
     }
     return NULL;
@@ -94,14 +145,32 @@ app_t* appget(const char* name)
 
 int appopen(app_t* app)
 {
-    if (!app || !app->app_ops || !app->app_ops->open) return -1;
-    return app->app_ops->open(app);
+    if (!app) return -1;
+    if (!app->app_ops || !app->app_ops->open) return -1;
+
+    app_cache_node_t* node = cache_find_by_app(app);
+    if (!node) return -1;
+
+    if (!(node->app_state & APP_STATE_OPENED)) {
+        node->app_state |= APP_STATE_OPENED;
+        return app->app_ops->open(app);
+    }
+    return 0;
 }
 
 int appclose(app_t* app)
 {
-    if (!app || !app->app_ops || !app->app_ops->close) return -1;
-    return app->app_ops->close(app);
+    if (!app) return -1;
+    if (!app->app_ops || !app->app_ops->close) return -1;
+
+    app_cache_node_t* node = cache_find_by_app(app);
+    if (!node) return -1;
+
+    if (node->app_state & APP_STATE_OPENED) {
+        node->app_state &= ~APP_STATE_OPENED;
+        return app->app_ops->close(app);
+    }
+    return 0;
 }
 
 int appread(app_t* app, void* data, uint32_t count, uint32_t mode)
@@ -129,14 +198,11 @@ int appioctl(app_t* app, const char* fmt, ...)
 void appfree(app_t* app)
 {
     if (!app) return;
-    dd_t* ddslots[4] = {app->dd0, app->dd1, app->dd2, app->dd3};
-    for (int i = 0; i < 4; i++) {
-        if (ddslots[i]) ddclose(ddslots[i]);
+
+    app_cache_node_t* node = cache_find_by_app(app);
+    if (node) {
+        node->get_refs--;
+        if (node->get_refs > 0) return;  /* 还有人引用 */
     }
-    app_t* appslots[4] = {app->app0, app->app1, app->app2, app->app3};
-    for (int i = 0; i < 4; i++) {
-        if (appslots[i]) appfree(appslots[i]);
-    }
-    if (app->app_data) osfree(app->app_data);
-    osfree(app);
+    /* TODO: 真正的释放逻辑 — get_refs == 0 时从链表移除, 递归清理 */
 }

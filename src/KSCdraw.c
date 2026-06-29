@@ -16,7 +16,13 @@ void k_window_setcanvas(k_draw_device* dev,KSC_window* screen,uintxy Gx,uintxy G
     
     Gx += screen->ssx;
     Gy += screen->ssy;
-    dev->setcanvas(Gx,Gy,width,height);
+    dev->setcanvas(dev->data, Gx, Gy, width, height);
+}
+
+void k_window_setpixels(k_draw_device* dev, KSC_window* screen, const KSCCOLOR* color, uint16_t num)
+{
+    (void)screen;
+    dev->setcolorpixels(dev->data, color, num);
 }
 
 static k_draw_device sys_dev;
@@ -147,28 +153,31 @@ void imgchange(const uint8_t* imgbuf,
 KSC_mes ksetpixel(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy x, uintxy y){
     if (!screen) return KSC_ERR;
     dev->setwindows(dev,screen, x, y, 1, 1);
-    dev->setcolorpixels(&color, 1);
+    dev->setpixels(dev, screen, &color, 1);
     return KSC_OK;
 }
 
 k_draw_device* kscreenmount(void){
     static k_draw_device dev={
+    .data=NULL,
     .init=screen_init,
     .setcanvas=screen_setcanvas,
     .setcolorpixels=screen_setcolorpixels,
     .setwindows=k_window_setcanvas,
+    .setpixels=k_window_setpixels,
     };
     k_draw_device* devp = &dev;
-    devp->init();
-    devp->setwindows=k_window_setcanvas;
+    devp->init(devp->data);
     return devp;
 }
 k_draw_device* k_draw_device_init(void){
+    sys_dev.data=NULL;
     sys_dev.init=screen_init;
     sys_dev.setcanvas=screen_setcanvas;
     sys_dev.setcolorpixels=screen_setcolorpixels;
-    sys_dev.init();
     sys_dev.setwindows=k_window_setcanvas;
+    sys_dev.setpixels=k_window_setpixels;
+    sys_dev.init(sys_dev.data);
     return &sys_dev;
 }
 
@@ -219,10 +228,10 @@ KSC_mes kfull(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy x1, 
     uint16_t staticbuf_pixel = (_STATICBUF_SIZE >> 1);
 
     while (pixelnum > staticbuf_pixel){
-        dev->setcolorpixels(buf, staticbuf_pixel);
+        dev->setpixels(dev, screen, buf, staticbuf_pixel);
         pixelnum -= staticbuf_pixel;
     }
-    dev->setcolorpixels(buf, (uint16_t)pixelnum);
+    dev->setpixels(dev, screen, buf, (uint16_t)pixelnum);
 
     return KSC_OK;
 }
@@ -373,7 +382,7 @@ KSC_mes kdrawimage(k_draw_device* dev,KSC_window* screen, const uint16_t* img, u
     if (!screen || !img) return KSC_ERR;
     dev->setwindows(dev,screen, x, y, width, height);
     uint16_t imgsize = width * height;
-    dev->setcolorpixels(img, imgsize);
+    dev->setpixels(dev, screen, img, imgsize);
     return KSC_OK;
 }
 
@@ -599,14 +608,14 @@ void kscreendraw(k_draw_device* dev,KSC_window* screen){
 /* 注: STM32 上 k_draw_device 的 setcanvas/setcolorpixels 由 kscgui.c
  *     的 gui_setcanvas/gui_pixels 覆盖, 不会走到这里。 */
 #if __USE_STM32__
-void screen_init(void) { }
-void screen_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height)
+void screen_init(void* data) { (void)data; }
+void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
-    (void)Gx; (void)Gy; (void)width; (void)height;
+    (void)data; (void)Gx; (void)Gy; (void)width; (void)height;
 }
-void screen_setcolorpixels(const KSCCOLOR* color, uint16_t num)
+void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
 {
-    (void)color; (void)num;
+    (void)data; (void)color; (void)num;
 }
 #endif
 
@@ -626,16 +635,18 @@ static uint32_t color16to24(uint16_t color16)
 }
 
 #define SCALE 3
-void screen_init(void)
+void screen_init(void* data)
 {
+    (void)data;
     initgraph(TFTx*SCALE,TFTy*SCALE);
     setlinecolor(BLACK);
     HWND hwnd = GetHWnd();
     MoveWindow(hwnd, 300, 100,TFTx*SCALE,TFTy*SCALE+10*SCALE, TRUE);
 }
 static uint16_t sSx,sSy,sEx,sEy,sCx,sCy;
-void screen_setcanvas(uintxy Gx,uintxy Gy, uintxy width,uintxy height)
+void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
+    (void)data;
     sSx = Gx; sSy = Gy; sEx=Gx+width-1; sEy=Gy+height-1; sCx=Gx; sCy=Gy;
 }
 static void movecursor(void)
@@ -646,8 +657,9 @@ static void movecursor(void)
         sCy++;
     }
 }
-void screen_setcolorpixels(const KSCCOLOR* color,uint16_t num)
+void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
 {
+    (void)data;
     while(num--){
         KSCCOLOR ncolor = *color++;
         ncolor = (ncolor)>>8| (ncolor<<8);

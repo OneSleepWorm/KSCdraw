@@ -5,8 +5,6 @@
 
 struct app_t;
 
-struct app_t;
-
 typedef struct papp_base_t {
     const char* app_name;
 } papp_base_t;
@@ -33,19 +31,19 @@ typedef struct __attribute__((aligned(16))) papp_t {
 } papp_t;
 
 typedef struct app_t {
-    const papp_t*    papp;
-    dd_t*            dd0;
-    dd_t*            dd1;
-    dd_t*            dd2;
-    dd_t*            dd3;
-    struct app_t*    app0;             /* 应用依赖 (appget 递归填充) */
-    struct app_t*    app1;
-    struct app_t*    app2;
-    struct app_t*    app3;
-    const papp_ops_t* app_ops;
-    void_func_t      callback;
-    void*            app_data;
-    void*            user_data;
+    const papp_t*       papp;
+    dd_t*               dd0;
+    dd_t*               dd1;
+    dd_t*               dd2;
+    dd_t*               dd3;
+    struct app_t*       app0;             /* 应用依赖 (appget 递归填充) */
+    struct app_t*       app1;
+    struct app_t*       app2;
+    struct app_t*       app3;
+    const papp_ops_t*   app_ops;
+    void_func_t         callback;
+    void*               app_data;
+    void*               user_data;
 } app_t;
 
 #define _APP_CONCAT2(a, b) a##b

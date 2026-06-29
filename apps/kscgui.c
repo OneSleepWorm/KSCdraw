@@ -14,7 +14,7 @@
  * ============================================================
  *   ROM(Debug -O0):  11,896 B (__DRAW_CIRCLE__=1) / 9,064 B (=0)  [†]
  *   ROM(Release -Os): 6,464 B (__DRAW_CIRCLE__=1) / 5,008 B (=0)  [†]
- *   RAM(静态):  4 B (_ctx 全局指针)
+ *   RAM(静态):  0 B (无全局变量)
  *   RAM(堆):    gui_ctx_t (~620 B, 含 pixbuf[512])
  *
  *   [†] 实测方式: 从 CMakeLists.txt target_sources 临时移除 kscgui.c,
@@ -63,6 +63,7 @@
  */
 
 #include "../inc/app.h"
+#include "../inc/super_spi.h"
 #include "../inc/KSCdraw.h"
 #include "../inc/KSCOSsystem.h"
 #include <string.h>
@@ -81,7 +82,8 @@ typedef struct {
 typedef struct {
     app_t*          spi[2];         /* [0]=super_spi1, [1]=super_spi2 */
     app_t*          sspi;           /* currently active SPI */
-    uint8_t         sspi_opened;
+    int             spi_dev[2];     /* device IDs on each SPI bus */
+    int             sspi_dev;       /* currently active device ID */
     k_draw_device   dev;
     gui_win_t       wins[GUI_MAX_WIN];
     uint8_t         win_count;
@@ -91,33 +93,33 @@ typedef struct {
     uint16_t        obj_count;      /* total objects in user array */
 } gui_ctx_t;
 
-static gui_ctx_t* _ctx;
-
 /* ================================================================
  * SPI device functions
  * ================================================================ */
-static void gui_init_stub(void) { }
+static void gui_init_stub(void* data) { (void)data; }
 
-static void gui_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height)
+static void gui_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
-    app_t* sspi = _ctx->sspi;
+    gui_ctx_t* ctx = (gui_ctx_t*)data;
+    app_t* sspi = ctx->sspi;
     uint16_t ex = Gx + width - 1;
     uint16_t ey = Gy + height - 1;
     uint8_t ca[] = {Gx >> 8, Gx & 0xFF, ex >> 8, ex & 0xFF};
     uint8_t ra[] = {Gy >> 8, Gy & 0xFF, ey >> 8, ey & 0xFF};
     uint8_t cmd;
-    cmd = 0x2A; appwrite(sspi, &cmd, 1, 10);
-    appwrite(sspi, ca, 4, 11);
-    cmd = 0x2B; appwrite(sspi, &cmd, 1, 10);
-    appwrite(sspi, ra, 4, 11);
-    cmd = 0x2C; appwrite(sspi, &cmd, 1, 10);
+    cmd = 0x2A; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
+    appwrite(sspi, ca, 4, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
+    cmd = 0x2B; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
+    appwrite(sspi, ra, 4, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
+    cmd = 0x2C; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
 }
 
-static void gui_pixels(const KSCCOLOR* colors, uint16_t num)
+static void gui_pixels(void* data, const KSCCOLOR* colors, uint16_t num)
 {
-    app_t* sspi = _ctx->sspi;
-    uint8_t* pixbuf = _ctx->pixbuf;
-    uint16_t batch = sizeof(_ctx->pixbuf) / 2;
+    gui_ctx_t* ctx = (gui_ctx_t*)data;
+    app_t* sspi = ctx->sspi;
+    uint8_t* pixbuf = ctx->pixbuf;
+    uint16_t batch = sizeof(ctx->pixbuf) / 2;
     while (num) {
         uint16_t n = (num > batch) ? batch : num;
         uint8_t* p = pixbuf;
@@ -126,7 +128,7 @@ static void gui_pixels(const KSCCOLOR* colors, uint16_t num)
             *p++ = c >> 8;
             *p++ = c & 0xFF;
         }
-        appwrite(sspi, pixbuf, n * 2, 13);
+        appwrite(sspi, pixbuf, n * 2, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT_DMA));
         colors += n;
         num -= n;
     }
@@ -135,17 +137,23 @@ static void gui_pixels(const KSCCOLOR* colors, uint16_t num)
 static void gui_window_setcanvas(k_draw_device* dev, KSC_window* screen,
     uintxy Gx, uintxy Gy, uintxy width, uintxy height)
 {
-    (void)dev;
-    gui_setcanvas(Gx + screen->ssx, Gy + screen->ssy, width, height);
+    gui_setcanvas(dev->data, Gx + screen->ssx, Gy + screen->ssy, width, height);
+}
+
+static void gui_window_setpixels(k_draw_device* dev, KSC_window* screen,
+    const KSCCOLOR* color, uint16_t num)
+{
+    (void)screen;
+    gui_pixels(dev->data, color, num);
 }
 
 /* ================================================================
  * ST7789 initialization
  * ================================================================ */
-static void gui_init_st7789(void)
+static void gui_init_st7789(gui_ctx_t* ctx)
 {
-    app_t* sspi = _ctx->sspi;
-    appwrite(sspi, NULL, 0, 14);
+    app_t* sspi = ctx->sspi;
+    appwrite(sspi, NULL, 0, SSPI_MODE(ctx->sspi_dev, SSPI_PULSE_R1));
     static const uint8_t init[] = {
         0x11,0,  0x00,0,  0x3A,1,0x05,  0xC5,1,0x1A,
         0x36,1,0x00,  0xB2,5,0x05,0x05,0x00,0x33,0x33,
@@ -162,8 +170,8 @@ static void gui_init_st7789(void)
         uint8_t cmd = *p++;
         uint8_t n = *p++;
         if (cmd == 0x00) { sysdelay(120); continue; }
-        appwrite(sspi, &cmd, 1, 10);
-        if (n) appwrite(sspi, (void*)p, n, 11);
+        appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
+        if (n) appwrite(sspi, (void*)p, n, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
         p += n;
     }
 }
@@ -173,6 +181,7 @@ static void gui_init_st7789(void)
  * ================================================================ */
 static int gui_open(app_t* app)
 {
+    if (app->app_data) return 0;  /* 幂等 */
     gui_ctx_t* ctx = (gui_ctx_t*)osmalloc(sizeof(gui_ctx_t));
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(gui_ctx_t));
@@ -180,18 +189,33 @@ static int gui_open(app_t* app)
     ctx->spi[0] = app->app0;    /* super_spi1 */
     ctx->spi[1] = app->app1;    /* super_spi2 */
 
+    ctx->dev.data = ctx;
     ctx->dev.init = gui_init_stub;
     ctx->dev.setcanvas = gui_setcanvas;
     ctx->dev.setcolorpixels = gui_pixels;
     ctx->dev.setwindows = gui_window_setcanvas;
+    ctx->dev.setpixels = gui_window_setpixels;
 
-    /* Open default SPI: SPI2 first, fallback to SPI1 */
-    if (ctx->spi[1]) ctx->sspi = ctx->spi[1];
-    else ctx->sspi = ctx->spi[0];
-    if (ctx->sspi) {
-        if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
-        ctx->sspi_opened = 1;
+    /* Open both SPI buses, register TFT device on each */
+    for (int i = 0; i < 2; i++) {
+        ctx->spi_dev[i] = -1;
+        if (!ctx->spi[i]) continue;
+        if (appopen(ctx->spi[i]) < 0) { osfree(ctx); return -1; }
+        ctx->spi_dev[i] = appioctl(ctx->spi[i], "reg");
+        if (ctx->spi_dev[i] < 0) { osfree(ctx); return -1; }
+        if (i == 0) {
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_CS,  4);
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_DC,  2);
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_R1,  3);
+        } else {
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_CS, 12);
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_DC,  8);
+            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_R1,  9);
+        }
     }
+    /* Default SPI: SPI2 first, fallback to SPI1 */
+    if (ctx->spi[1]) { ctx->sspi = ctx->spi[1]; ctx->sspi_dev = ctx->spi_dev[1]; }
+    else { ctx->sspi = ctx->spi[0]; ctx->sspi_dev = ctx->spi_dev[0]; }
 
     /* Default window 0: full screen */
     ctx->wins[0].scr.ssx = 0;
@@ -212,11 +236,10 @@ static int gui_open(app_t* app)
 static int gui_close(app_t* app)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    if (ctx) {
-        if (ctx->sspi && ctx->sspi_opened) appclose(ctx->sspi);
-        osfree(ctx);
-        app->app_data = NULL;
-    }
+    if (!ctx) return 0;  /* 幂等 */
+    for (int i = 0; i < 2; i++) if (ctx->spi[i]) appclose(ctx->spi[i]);
+    osfree(ctx);
+    app->app_data = NULL;
     return 0;
 }
 
@@ -226,7 +249,6 @@ static int gui_close(app_t* app)
 static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    _ctx = ctx;
     KSC_window* scr = &ctx->wins[ctx->active_win].scr;
 
     /* --- lifecycle --- */
@@ -235,23 +257,24 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         if (n < 1 || n > 2) return 0;
         app_t* new_spi = ctx->spi[n - 1];
         if (!new_spi || new_spi == ctx->sspi) return 0;
-        if (ctx->sspi_opened) appclose(ctx->sspi);
+        if (ctx->sspi) appclose(ctx->sspi);
         ctx->sspi = new_spi;
-        if (appopen(ctx->sspi) < 0) { ctx->sspi = NULL; ctx->sspi_opened = 0; return 0; }
+        if (appopen(ctx->sspi) < 0) { ctx->sspi = NULL; return 0; }
+        ctx->sspi_dev = ctx->spi_dev[n - 1];
         return 1;
     }
 
     if (strcmp(cmd, "init") == 0) {
-        if (!ctx->sspi || !ctx->sspi_opened) return 0;
-        gui_init_st7789();
+        if (!ctx->sspi) return 0;
+        gui_init_st7789(ctx);
         return 1;
     }
 
     if (strcmp(cmd, "orient") == 0) {
-        uint8_t mode = (uint8_t)va_arg(ap, int);
+        uint8_t orient = (uint8_t)va_arg(ap, int);
         uint8_t mcmd = 0x36;
-        appwrite(ctx->sspi, &mcmd, 1, 10);
-        appwrite(ctx->sspi, &mode, 1, 11);
+        appwrite(ctx->sspi, &mcmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
+        appwrite(ctx->sspi, &orient, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
         return 1;
     }
 
@@ -453,7 +476,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         while (remain) {
             uint16_t n = (remain > sizeof(ctx->pixbuf)) ? (uint16_t)sizeof(ctx->pixbuf) : remain;
             memcpy(ctx->pixbuf, img, n);
-            appwrite(ctx->sspi, ctx->pixbuf, n, 13);
+            appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT_DMA));
             img += n;
             remain -= n;
         }

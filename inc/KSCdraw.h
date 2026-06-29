@@ -7,9 +7,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void screen_init(void);
-void screen_setcolorpixels(const KSCCOLOR* color, uint16_t num);
-void screen_setcanvas(uintxy Gx, uintxy Gy, uintxy width, uintxy height);
+void screen_init(void* data);
+void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num);
+void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
 #ifdef __cplusplus
 }
 #endif
@@ -43,15 +43,18 @@ typedef struct KSC_window {
 typedef struct k_draw_device k_draw_device;
 typedef struct KSC_window KSC_window;
 
-typedef void (*SCR_INIT)(void);
-typedef void (*SCR_SETCANVAS)(uintxy Gx,uintxy Gy, uintxy width,uintxy height);
-typedef void (*SCR_SETCOLORPIXELS)(const KSCCOLOR* color,uint16_t num);
-typedef void (*SCR_WINDOW_SETCANVAS)(k_draw_device* dev,KSC_window* screen,uintxy Gx,uintxy Gy, uintxy width,uintxy height);
+typedef void (*SCR_INIT)(void* data);
+typedef void (*SCR_SETCANVAS)(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
+typedef void (*SCR_SETCOLORPIXELS)(void* data, const KSCCOLOR* color, uint16_t num);
+typedef void (*SCR_WINDOW_SETCANVAS)(k_draw_device* dev, KSC_window* screen, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
+typedef void (*SCR_WINDOW_SETPIXELS)(k_draw_device* dev, KSC_window* screen, const KSCCOLOR* color, uint16_t num);
 typedef struct k_draw_device{
-    SCR_INIT init;
+    void*       data;            /* hardware driver context */
+    SCR_INIT    init;
     SCR_SETCANVAS setcanvas;
     SCR_SETCOLORPIXELS setcolorpixels;
     SCR_WINDOW_SETCANVAS setwindows;
+    SCR_WINDOW_SETPIXELS setpixels;
 }k_draw_device;
 
 

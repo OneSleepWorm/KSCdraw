@@ -78,6 +78,7 @@
  */
 
 #include "../inc/app.h"
+#include "../inc/super_spi.h"
 #include "../inc/KSCOSsystem.h"
 #if __USE_STM32__
 
@@ -87,6 +88,7 @@
 
 typedef struct {
     app_t* sspi;
+    int    dev_id;
     uint32_t addr;
 } w25_ctx_t;
 
@@ -99,12 +101,12 @@ typedef struct {
 
 static void w25_cs_low(w25_ctx_t* ctx)
 {
-    appwrite(ctx->sspi, NULL, 0, 22);
+    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->dev_id, SSPI_CS_LOW));
 }
 
 static void w25_cs_high(w25_ctx_t* ctx)
 {
-    appwrite(ctx->sspi, NULL, 0, 23);
+    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->dev_id, SSPI_CS_HIGH));
 }
 
 static void w25_xfer(w25_ctx_t* ctx, const void* tx, uint16_t txlen,
@@ -115,7 +117,7 @@ static void w25_xfer(w25_ctx_t* ctx, const void* tx, uint16_t txlen,
     x.tx_len = txlen;
     x.rx_buf = rx;
     x.rx_len = rxlen;
-    appwrite(ctx->sspi, &x, 1, 17);
+    appwrite(ctx->sspi, &x, 1, SSPI_XFER);
 }
 
 static void w25_we(w25_ctx_t* ctx)
@@ -147,9 +149,10 @@ static int w25_app_open(app_t* app)
 
     appopen(ctx->sspi);
 
-    uint32_t pins = CS_PIN | (DC_PIN << 8) | (RST_PIN << 16);
-    appwrite(ctx->sspi, &pins, 1, 5);
-    appwrite(ctx->sspi, NULL, 0, 1);
+    ctx->dev_id = appioctl(ctx->sspi, "reg");
+    if (ctx->dev_id < 0) { appclose(ctx->sspi); osfree(ctx); return -1; }
+    appioctl(ctx->sspi, "setpin", ctx->dev_id, SSPI_CS, CS_PIN);
+    appioctl(ctx->sspi, "setpin", ctx->dev_id, SSPI_R1, RST_PIN);
 
     uint8_t cmd = 0x9F, id[3];
     w25_cs_low(ctx);
