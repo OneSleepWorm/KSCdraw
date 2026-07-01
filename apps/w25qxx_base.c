@@ -7,7 +7,7 @@
  * ============================================================
  * 注册名:  w25qxx_base
  * dep:     NULL
- * app_dep: "1\0super_spi2"
+ * app_dep: "1\0super_spi"
  * 平台:    STM32 (__USE_STM32__)
  * CS 引脚: PB11 (通过 super_spi2 mode=5 运行时重映射)
  *
@@ -71,7 +71,7 @@
  * ============================================================
  * 1. 所有写入/擦除类操作 (mode 3~6) 内部自动 WE + 等待完成.
  * 2. mode=0 为 no-op.
- * 3. 纯 super_spi2 依赖, 通过 appwrite mode 17/22/23 完成 SPI 通信.
+ * 3. 纯 super_spi (SPI2) 依赖, 通过 appwrite 完成 SPI 通信.
  * 4. appopen 时通过 super_spi2 mode=5 重设 CS=PB11/DC=PB0/RST=PB1.
  * 5. Wait busy 为内置自动行为, 无需显式调用.
  * 6. CS 由本层通过 mode 22(↓) / 23(↑) 控制, 零拷贝原始数据传输.
@@ -89,35 +89,29 @@
 typedef struct {
     app_t* sspi;
     int    dev_id;
+    uint8_t spi_inst;
     uint32_t addr;
 } w25_ctx_t;
 
-typedef struct {
-    void*   tx_buf;
-    uint16_t tx_len;
-    void*   rx_buf;
-    uint16_t rx_len;
-} w25_spi_xfer_t;
-
 static void w25_cs_low(w25_ctx_t* ctx)
 {
-    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->dev_id, SSPI_CS_LOW));
+    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->spi_inst, ctx->dev_id, SSPI_CS_LOW));
 }
 
 static void w25_cs_high(w25_ctx_t* ctx)
 {
-    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->dev_id, SSPI_CS_HIGH));
+    appwrite(ctx->sspi, NULL, 0, SSPI_MODE(ctx->spi_inst, ctx->dev_id, SSPI_CS_HIGH));
 }
 
 static void w25_xfer(w25_ctx_t* ctx, const void* tx, uint16_t txlen,
                      void* rx, uint16_t rxlen)
 {
-    w25_spi_xfer_t x;
+    spi_xfer_t x;
     x.tx_buf = (void*)tx;
     x.tx_len = txlen;
     x.rx_buf = rx;
     x.rx_len = rxlen;
-    appwrite(ctx->sspi, &x, 1, SSPI_XFER);
+    appwrite(ctx->sspi, &x, 1, SSPI_XFER_INST(ctx->spi_inst));
 }
 
 static void w25_we(w25_ctx_t* ctx)
@@ -145,14 +139,15 @@ static int w25_app_open(app_t* app)
     if (!ctx) return -1;
 
     ctx->sspi = app->app0;
+    ctx->spi_inst = 2;
     app->app_data = ctx;
 
     appopen(ctx->sspi);
 
-    ctx->dev_id = appioctl(ctx->sspi, "reg");
+    ctx->dev_id = appioctl(ctx->sspi, "reg", 2);
     if (ctx->dev_id < 0) { appclose(ctx->sspi); osfree(ctx); return -1; }
-    appioctl(ctx->sspi, "setpin", ctx->dev_id, SSPI_CS, CS_PIN);
-    appioctl(ctx->sspi, "setpin", ctx->dev_id, SSPI_R1, RST_PIN);
+    appioctl(ctx->sspi, "setpin", 2, ctx->dev_id, SSPI_CS, CS_PIN);
+    appioctl(ctx->sspi, "setpin", 2, ctx->dev_id, SSPI_R1, RST_PIN);
 
     uint8_t cmd = 0x9F, id[3];
     w25_cs_low(ctx);
@@ -325,6 +320,6 @@ static const papp_ops_t w25_app_ops = {
     .read  = w25_app_read,
 };
 
-REGISTER_APP_EX("w25qxx_base", NULL, "1\0super_spi2", &w25_app_ops, "W25Q64 SPI NOR Flash");
+REGISTER_APP_EX("w25qxx_base", "0", "1\0super_spi", &w25_app_ops, "W25Q64 SPI NOR Flash");
 
 #endif

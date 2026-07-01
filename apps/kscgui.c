@@ -6,7 +6,7 @@
  * 基本信息
  * ============================================================
  * 注册名:  KSCGUI
- * 依赖:    super_spi1 + super_spi2 (app 依赖)
+ * 依赖:    super_spi (app 依赖, 统一 SPI1+SPI2)
  * 平台:    STM32 (__USE_STM32__)
  *
  * ============================================================
@@ -80,10 +80,10 @@ typedef struct {
 } gui_win_t;
 
 typedef struct {
-    app_t*          spi[2];         /* [0]=super_spi1, [1]=super_spi2 */
-    app_t*          sspi;           /* currently active SPI */
-    int             spi_dev[2];     /* device IDs on each SPI bus */
-    int             sspi_dev;       /* currently active device ID */
+    app_t*          sspi;           /* super_spi (unified) */
+    uint8_t         sspi_inst;      /* active SPI instance: 1 or 2 */
+    int             sspi_dev;       /* device ID on active instance */
+    int             spi_dev[2];     /* [0]=SPI1 dev, [1]=SPI2 dev */
     k_draw_device   dev;
     gui_win_t       wins[GUI_MAX_WIN];
     uint8_t         win_count;
@@ -107,11 +107,11 @@ static void gui_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy
     uint8_t ca[] = {Gx >> 8, Gx & 0xFF, ex >> 8, ex & 0xFF};
     uint8_t ra[] = {Gy >> 8, Gy & 0xFF, ey >> 8, ey & 0xFF};
     uint8_t cmd;
-    cmd = 0x2A; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
-    appwrite(sspi, ca, 4, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
-    cmd = 0x2B; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
-    appwrite(sspi, ra, 4, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
-    cmd = 0x2C; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
+    cmd = 0x2A; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
+    appwrite(sspi, ca, 4, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
+    cmd = 0x2B; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
+    appwrite(sspi, ra, 4, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
+    cmd = 0x2C; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
 }
 
 static void gui_pixels(void* data, const KSCCOLOR* colors, uint16_t num)
@@ -128,7 +128,7 @@ static void gui_pixels(void* data, const KSCCOLOR* colors, uint16_t num)
             *p++ = c >> 8;
             *p++ = c & 0xFF;
         }
-        appwrite(sspi, pixbuf, n * 2, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT_DMA));
+        appwrite(sspi, pixbuf, n * 2, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
         colors += n;
         num -= n;
     }
@@ -153,7 +153,7 @@ static void gui_window_setpixels(k_draw_device* dev, KSC_window* screen,
 static void gui_init_st7789(gui_ctx_t* ctx)
 {
     app_t* sspi = ctx->sspi;
-    appwrite(sspi, NULL, 0, SSPI_MODE(ctx->sspi_dev, SSPI_PULSE_R1));
+    appwrite(sspi, NULL, 0, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_PULSE_R1));
     static const uint8_t init[] = {
         0x11,0,  0x00,0,  0x3A,1,0x05,  0xC5,1,0x1A,
         0x36,1,0x00,  0xB2,5,0x05,0x05,0x00,0x33,0x33,
@@ -170,8 +170,8 @@ static void gui_init_st7789(gui_ctx_t* ctx)
         uint8_t cmd = *p++;
         uint8_t n = *p++;
         if (cmd == 0x00) { sysdelay(120); continue; }
-        appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
-        if (n) appwrite(sspi, (void*)p, n, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
+        appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
+        if (n) appwrite(sspi, (void*)p, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
         p += n;
     }
 }
@@ -186,8 +186,7 @@ static int gui_open(app_t* app)
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(gui_ctx_t));
 
-    ctx->spi[0] = app->app0;    /* super_spi1 */
-    ctx->spi[1] = app->app1;    /* super_spi2 */
+    ctx->sspi = app->app0;      /* super_spi (unified) */
 
     ctx->dev.data = ctx;
     ctx->dev.init = gui_init_stub;
@@ -196,26 +195,27 @@ static int gui_open(app_t* app)
     ctx->dev.setwindows = gui_window_setcanvas;
     ctx->dev.setpixels = gui_window_setpixels;
 
-    /* Open both SPI buses, register TFT device on each */
-    for (int i = 0; i < 2; i++) {
-        ctx->spi_dev[i] = -1;
-        if (!ctx->spi[i]) continue;
-        if (appopen(ctx->spi[i]) < 0) { osfree(ctx); return -1; }
-        ctx->spi_dev[i] = appioctl(ctx->spi[i], "reg");
-        if (ctx->spi_dev[i] < 0) { osfree(ctx); return -1; }
-        if (i == 0) {
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_CS,  4);
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_DC,  2);
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_R1,  3);
-        } else {
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_CS, 12);
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_DC,  8);
-            appioctl(ctx->spi[i], "setpin", ctx->spi_dev[i], SSPI_R1,  9);
-        }
-    }
-    /* Default SPI: SPI2 first, fallback to SPI1 */
-    if (ctx->spi[1]) { ctx->sspi = ctx->spi[1]; ctx->sspi_dev = ctx->spi_dev[1]; }
-    else { ctx->sspi = ctx->spi[0]; ctx->sspi_dev = ctx->spi_dev[0]; }
+    /* Open single super_spi, register TFT device on each instance */
+    ctx->spi_dev[0] = -1;
+    ctx->spi_dev[1] = -1;
+    if (!ctx->sspi) { osfree(ctx); return -1; }
+    if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
+
+    ctx->spi_dev[0] = appioctl(ctx->sspi, "reg", 1);
+    if (ctx->spi_dev[0] < 0) { osfree(ctx); return -1; }
+    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_CS,  4);
+    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_DC,  2);
+    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_R1,  3);
+
+    ctx->spi_dev[1] = appioctl(ctx->sspi, "reg", 2);
+    if (ctx->spi_dev[1] < 0) { osfree(ctx); return -1; }
+    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_CS, 12);
+    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_DC,  8);
+    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_R1,  9);
+
+    /* Default SPI: SPI2 first */
+    ctx->sspi_inst = 2;
+    ctx->sspi_dev  = ctx->spi_dev[1];
 
     /* Default window 0: full screen */
     ctx->wins[0].scr.ssx = 0;
@@ -237,7 +237,7 @@ static int gui_close(app_t* app)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
     if (!ctx) return 0;  /* 幂等 */
-    for (int i = 0; i < 2; i++) if (ctx->spi[i]) appclose(ctx->spi[i]);
+    if (ctx->sspi) appclose(ctx->sspi);
     osfree(ctx);
     app->app_data = NULL;
     return 0;
@@ -255,12 +255,9 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
     if (strcmp(cmd, "setspi") == 0) {
         int n = va_arg(ap, int);
         if (n < 1 || n > 2) return 0;
-        app_t* new_spi = ctx->spi[n - 1];
-        if (!new_spi || new_spi == ctx->sspi) return 0;
-        if (ctx->sspi) appclose(ctx->sspi);
-        ctx->sspi = new_spi;
-        if (appopen(ctx->sspi) < 0) { ctx->sspi = NULL; return 0; }
-        ctx->sspi_dev = ctx->spi_dev[n - 1];
+        if ((uint8_t)n == ctx->sspi_inst) return 0;
+        ctx->sspi_inst = (uint8_t)n;
+        ctx->sspi_dev  = ctx->spi_dev[n - 1];
         return 1;
     }
 
@@ -273,8 +270,8 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
     if (strcmp(cmd, "orient") == 0) {
         uint8_t orient = (uint8_t)va_arg(ap, int);
         uint8_t mcmd = 0x36;
-        appwrite(ctx->sspi, &mcmd, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_CMD));
-        appwrite(ctx->sspi, &orient, 1, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT));
+        appwrite(ctx->sspi, &mcmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
+        appwrite(ctx->sspi, &orient, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
         return 1;
     }
 
@@ -476,7 +473,7 @@ static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
         while (remain) {
             uint16_t n = (remain > sizeof(ctx->pixbuf)) ? (uint16_t)sizeof(ctx->pixbuf) : remain;
             memcpy(ctx->pixbuf, img, n);
-            appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_dev, SSPI_SEND_DAT_DMA));
+            appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
             img += n;
             remain -= n;
         }
@@ -568,8 +565,7 @@ static const papp_ops_t kscgui_ops = {
     .ioctl = gui_ioctl,
 };
 
-/* Dependencies: super_spi1 (app0), super_spi2 (app1) */
-REGISTER_APP_EX("KSCGUI", "0", "2\0super_spi1\0super_spi2", &kscgui_ops,
+REGISTER_APP_EX("KSCGUI", "0", "1\0super_spi", &kscgui_ops,
     "KSC GUI Manager (SPI1/SPI2, multi-window, object rendering)");
 
 #endif

@@ -1,5 +1,7 @@
-#ifndef __SUPER_SPI_H__
-#define __SUPER_SPI_H__
+#ifndef __SUPER_SPI_V2_H__
+#define __SUPER_SPI_V2_H__
+
+#include <stdint.h>
 
 #define SSPI_PIN_NONE   0xFF
 
@@ -25,8 +27,17 @@
 #define SSPI_SEND_DAT_DMA 0x0E
 #define SSPI_PULSE_R1    0x0F
 
-#define SSPI_XFER       0x10
+#define SSPI_MODE(spi_inst, dev_id, op)  \
+    (((((spi_inst)-1) & 1) << 6) | (((dev_id) & 3) << 4) | ((op) & 0x0F))
 
-#define SSPI_MODE(dev_id, op)  (((dev_id) << 4) | (op))
+#define SSPI_XFER        0x80
+#define SSPI_XFER_INST(i) (0x80 | ((((i)-1) & 1) << 6))
+
+typedef struct {
+    void*    tx_buf;
+    uint16_t tx_len;
+    void*    rx_buf;
+    uint16_t rx_len;
+} spi_xfer_t;
 
 #endif

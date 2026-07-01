@@ -26,7 +26,7 @@ target_compile_options(KSCOS PRIVATE -Wall -Wextra)
 
 add_subdirectory(src)
 
-add_subdirectory(pdrvs)
+# add_subdirectory(pdrvs)  # pdrvs 已全部移除
 
 target_link_libraries(KSCOS PRIVATE KSCOS_SRC easyx)
 
