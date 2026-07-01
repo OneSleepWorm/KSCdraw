@@ -1,7 +1,7 @@
 #include "../inc/app.h"
 #include "../inc/dd.h"
 #include "../inc/KSCOSsystem.h"
-#include "string.h"
+#include <string.h>
 
 /* ================================================================
  * 应用缓存 — 单例 + 引用计数
@@ -31,24 +31,6 @@ static app_cache_node_t* cache_find_by_app(const app_t* app)
         if (p->app == app)
             return p;
     return NULL;
-}
-
-static int resolve_deps(const char* dep_str, dd_t** slots)
-{
-    if (!dep_str || !dep_str[0] || dep_str[0] == '0') return 0;
-    int count = dep_str[0] - '0';
-    if (count > 4) count = 4;
-    const char* p = dep_str + 2;
-    int j;
-    for (j = 0; j < count; j++) {
-        size_t plen = strlen(p);
-        if (plen == 0) break;
-        dd_t* dd = bus_getdriver(p);
-        if (!dd) return -1;
-        slots[j] = dd;
-        p += plen + 1;
-    }
-    return j;
 }
 
 static int resolve_app_deps(const char* app_dep_str, app_t** slots)
@@ -96,10 +78,6 @@ app_t* appget(const char* name)
         if (!app) return NULL;
 
         app->papp        = papp;
-        app->dd0         = NULL;
-        app->dd1         = NULL;
-        app->dd2         = NULL;
-        app->dd3         = NULL;
         app->app0        = NULL;
         app->app1        = NULL;
         app->app2        = NULL;
@@ -109,18 +87,9 @@ app_t* appget(const char* name)
         app->app_data    = NULL;
         app->user_data   = NULL;
 
-        dd_t* ddslots[4] = {NULL, NULL, NULL, NULL};
-        if (resolve_deps(papp->dep_str, ddslots) < 0) {
-            osfree(app);
-            return NULL;
-        }
-        app->dd0 = ddslots[0]; app->dd1 = ddslots[1];
-        app->dd2 = ddslots[2]; app->dd3 = ddslots[3];
-
         if (papp->app_dep_str) {
             app_t* appslots[4] = {NULL, NULL, NULL, NULL};
             if (resolve_app_deps(papp->app_dep_str, appslots) < 0) {
-                for (int k = 0; k < 4; k++) if (ddslots[k]) ddclose(ddslots[k]);
                 if (appslots[0]) appfree(appslots[0]);
                 osfree(app);
                 return NULL;

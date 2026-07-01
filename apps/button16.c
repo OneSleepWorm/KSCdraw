@@ -54,6 +54,7 @@
  * write |  1   | NULL       | 0     | 初始化 GPIO (推挽输出 + 上拉输入)
  * write |  2   | uint32_t*  | 1     | 设扫描间隔(ms), 启动定时器
  * write |  4   | uint32_t*  | 1     | 1=开启复杂模式 0=关闭
+ * write |  5   | uint32_t[2]| 1-2   | {hold_ticks, hold_gap} HOLD参数
  * read  |  1   | uint32_t*  | 0     | 返回 latest_keys (16-bit raw)
  * read  |  2   | uint32_t*  | 0     | 返回 interval_ms
  * read  |  3   | uint32_t*  | 0     | 弹出事件 (复杂模式)
@@ -81,17 +82,19 @@
  * 2. 复杂模式默认启用；禁用后节省内存 (cpx 结构体 ~60B)
  * 3. 事件队列 16 槽，溢出时新事件丢弃
  * 4. 扫描间隔建议 30-100ms，精度由 tim_clock_3 决定
- * 5. 去抖算法: 按下后 HOLD_TICKS(4)=200ms 触发 HOLD,
+ * 5. 去抖算法: 按下后 hold_ticks(default 4)=200ms 进入 HOLD,
+ *    进入 HOLD 后每 hold_gap(default 1) tick 发一次 HOLD,
  *    LONG_TICKS(20)=1000ms 触发 LONG,
  *    DBL_TICKS(8)=400ms 窗口内第二次按下触发 DBLCLICK
+ *    HOLD 参数通过 appwrite(NULL, p, 2, 5) 配置: p[0]=hold_ticks, p[1]=hold_gap
  *
  * ============================================================
- * 资源占用 (对比: 移除 button16.o 后固件尺寸差值)
+ * 资源占用 (LTO差分法: 移除 button16.c 后固件尺寸差值)
  * ============================================================
- *   ROM(Debug -O0):   1,824 B
- *   ROM(Release -Os): ~965 B
- *   RAM(静态):  0 B
- *   RAM(堆):    btn16_data_t (~20 B) + btn16_cpx_t (~150 B) = ~170 B
+ *   ROM(Debug -O0):   1,828 B
+ *   ROM(Release -Os):   988 B
+ *   RAM(静态):   0 B
+ *   RAM(堆):     btn16_data_t (~20 B) + btn16_cpx_t (~150 B) = ~170 B
  *
  * ============================================================
  * 外部接口
@@ -101,6 +104,7 @@
  *   appwrite(mode=1)   : 初始化 GPIO (推挽输出+上拉输入)
  *   appwrite(mode=2)   : 设置扫描间隔并启动 TIM3
  *   appwrite(mode=4)   : 切换复杂模式 (1=开 0=关)
+ *   appwrite(mode=5)   : 设置 {hold_ticks, hold_gap}
  *   appread(mode=1)    : 读 latest_keys (16-bit raw bitmap)
  *   appread(mode=2)    : 读 interval_ms
  *   appread(mode=3)    : 弹出一个事件 (复杂模式)
@@ -131,7 +135,8 @@
 #define STATE_HOLD    2
 
 #define TICK_MS       50
-#define HOLD_TICKS    4
+#define HOLD_TICKS_DEF 4
+#define HOLD_GAP_DEF  1
 #define LONG_TICKS    20
 #define DBL_TICKS     8
 
@@ -149,6 +154,8 @@ typedef struct {
     uint8_t  down_ticks[16];
     uint8_t  click_timers[16];
     uint32_t prev_raw;
+    uint8_t  hold_ticks;
+    uint8_t  hold_gap;
 } btn16_cpx_t;
 
 typedef struct {
@@ -231,13 +238,14 @@ static void* scan_cb(void* data)
 
             if (c->states[i] == STATE_DOWN) {
                 c->down_ticks[i]++;
-                if (c->down_ticks[i] == HOLD_TICKS) {
+                if (c->down_ticks[i] >= c->hold_ticks) {
                     c->states[i] = STATE_HOLD;
-                    ev_push(c, EV_PACK(i, KEY_HOLD));
                 }
             }
 
             if (c->states[i] == STATE_HOLD) {
+                if ((c->down_ticks[i] - c->hold_ticks) % c->hold_gap == 0)
+                    ev_push(c, EV_PACK(i, KEY_HOLD));
                 c->down_ticks[i]++;
                 if (c->down_ticks[i] >= LONG_TICKS && !(c->flags[i] & 1)) {
                     c->flags[i] |= 1;
@@ -267,7 +275,11 @@ static int btn16_open(app_t* app)
     d->complex_mode  = 1;
     d->latest_keys   = 0;
     d->cpx = osmalloc(sizeof(btn16_cpx_t));
-    if (d->cpx) memset(d->cpx, 0, sizeof(btn16_cpx_t));
+    if (d->cpx) {
+        memset(d->cpx, 0, sizeof(btn16_cpx_t));
+        d->cpx->hold_ticks = HOLD_TICKS_DEF;
+        d->cpx->hold_gap   = HOLD_GAP_DEF;
+    }
     app->app_data = d;
     return 0;
 }
@@ -350,6 +362,11 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
             d->cpx = NULL;
             d->complex_mode = 0;
         }
+        return 1;
+    }
+    if (mode == 5 && data && d->complex_mode && d->cpx) {
+        if (count >= 1) d->cpx->hold_ticks = (uint8_t)((uint32_t*)data)[0];
+        if (count >= 2) d->cpx->hold_gap   = (uint8_t)((uint32_t*)data)[1];
         return 1;
     }
     return 0;

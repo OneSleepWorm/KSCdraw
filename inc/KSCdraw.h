@@ -19,15 +19,15 @@ void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy hei
 
 //对象属性定义ksc_obj_t
 typedef struct ksc_obj_t{
-    void* data;//对象数据指针
-    KSCCOLOR colorck;//对象颜色
-    ku8 width;//对象宽度(这个参数有时无需预定义,根据对象类型而定)
-    ku8 height;//对象高度
-    ku8 sdx;//对象x偏移量(相对于屏幕左上角，下同)
-    ku8 sdy;//对象y偏移量
-    ku8 d_and_r;//对象半径和深度 低5位为半径，高3位为深度
-    ku8 _type;//对象类型和状态 低4位为类型，高4位为状态
-}ksc_obj_t;//size:12
+    void*     data;
+    KSCCOLOR  colorck;
+    ku8       width;
+    ku8       height;
+    ku8       sdx;
+    ku8       sdy;
+    ku8       d_and_r;
+    ku8       _type;      // [高4位:用户私有] [低4位:draw_table索引]
+} ksc_obj_t;
 typedef ksc_obj_t KSC_obj_t;
 typedef struct KSC_window {
     ksc_obj_t* objbuf;//对象缓冲区
@@ -66,27 +66,24 @@ typedef enum KSC_mes{
 }KSC_mes;
 
 
-#define _box 1
-#define _string 2
-#define _image 3
-#define _roundrect 4
-#define _fillroundrect 5
-#define _fillbox 6
-#define _fillcircle 7
-#define _line 8
-#define _imagebig 9
-#define _circle 10
-#define _char 11
+#define _fillbox      0
+#define _box          1
+#define _line         2
+#define _string       3
+#define _image        4
+#define _imagebig     5
+#define _ibin         6
+#define _circle       7
+#define _fillcircle   8
+#define _arc          9
+#define _roundrect   10
+#define _fillroundrect 11
+#define _char        12
 #define _rect _box
 #define _fillrect _fillbox
 
 
-#define _type_mask (0x0F)
-#define _flag_mask (0xF0)
-#define _active   (0x80)
-#define _visible  (0x40)
-#define _dirty    (0x20)
-#define _u0       (0x10)
+#define _type_mask (0x0F)   // 低4位 → draw_table 索引
 #define _r_mask (0x1F)
 #define _d_mask (0xE0)
 
@@ -109,6 +106,14 @@ KSC_mes kfull(k_draw_device* dev,KSC_window* screen,KSCCOLOR color,uintxy x1,uin
 // 绘制任意方向线段
 KSC_mes kline(k_draw_device* dev,KSC_window* screen,KSCCOLOR color,uintxy x1,uintxy y1,uintxy x2,uintxy y2);
 // 绘制矩形边框
+/* 自定义绘制函数类型 */
+typedef void (*draw_fn)(k_draw_device* dev, KSC_window* screen, struct ksc_obj_t* obj);
+
+/* draw_table 管理 */
+void kobjdraw_init(k_draw_device* dev);
+int  ksc_set_draw_func(uint8_t idx, draw_fn fn);
+draw_fn ksc_get_draw_func(uint8_t idx);
+
 KSC_mes kbox(k_draw_device* dev,KSC_window* screen,KSCCOLOR color,uintxy x1,uintxy y1,uintxy w,uintxy h);
 // 填充矩形区域
 KSC_mes kfillbox(k_draw_device* dev,KSC_window* screen,KSCCOLOR color,uintxy x1,uintxy y1,uintxy width,uintxy height);

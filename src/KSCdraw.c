@@ -510,97 +510,102 @@ void kscreenclear(k_draw_device* dev,KSC_window* screen){
     kfull(dev,screen,screen->bk,0,0,screen->width,screen->height);
 }
 
-void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj){
-    if(!dev || !screen || !obj)return;
-    //printf("obj->_type=%02X\n",obj->_type);
-    switch (obj->_type&_type_mask)
-    {
+/* ================================================================
+ * draw_table — 16 槽函数分发表
+ * ================================================================ */
+static draw_fn draw_table[16];
+
+/* --- 内置类型封装器 --- */
+static void draw_fillbox_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kfillbox(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->width, obj->height);
+}
+static void draw_box_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kbox(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->width, obj->height);
+}
+static void draw_line_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kline(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->width, obj->height);
+}
+static void draw_string_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kstring(dev, screen, (char*)obj->data, obj->sdx, obj->sdy, obj->colorck, screen->bk);
+}
+static void draw_image_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kdrawimage(dev, screen, (const uint16_t*)obj->data, obj->sdx, obj->sdy, obj->width, obj->height);
+}
+static void draw_imagebig_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kdrawimagebig(dev, screen, (const uint16_t*)obj->data, obj->sdx, obj->sdy, obj->width, obj->height, obj->d_and_r);
+}
+static void draw_imagebin_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kimagebin(dev, screen, (const uint8_t*)obj->data, obj->sdx, obj->sdy, obj->width, obj->height, obj->colorck, screen->bk);
+}
+static void draw_char_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kchar(dev, screen, *(char*)obj->data, obj->sdx, obj->sdy, obj->colorck, screen->bk);
+}
 #if __DRAW_CIRCLE__
-    case _circle: {
-        /* code */
-        uint8_t r = obj->d_and_r&_r_mask;
-        kcircle(dev,screen,obj->colorck,obj->sdx+r,obj->sdy+r,r);
-        break;
-    }
+static void draw_circle_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    uint8_t r = obj->d_and_r & _r_mask;
+    kcircle(dev, screen, obj->colorck, obj->sdx + r, obj->sdy + r, r);
+}
+static void draw_fillcircle_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    uint8_t r = obj->d_and_r & _r_mask;
+    kfillcircle(dev, screen, obj->colorck, obj->sdx + r, obj->sdy + r, r);
+}
+static void draw_arc_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    karc(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->d_and_r & _r_mask, obj->width);
+}
+static void draw_rrect_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kroundrect(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->width, obj->height, obj->d_and_r & _r_mask);
+}
+static void draw_frrect_wrap(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    kfillroundrect(dev, screen, obj->colorck, obj->sdx, obj->sdy, obj->width, obj->height, obj->d_and_r & _r_mask);
+}
 #endif
-    case _box:
-        /* code */
-        kbox(dev,screen,obj->colorck,obj->sdx,obj->sdy,obj->width,obj->height);
-        break;
-    case _string:
-        /* code */
-        kstring(dev,screen,(char*)obj->data,obj->sdx,obj->sdy,obj->colorck,screen->bk);
-        break;
-    case _image:
-        /* code */
-        kdrawimage(dev,screen,obj->data,obj->sdx,obj->sdy
-        ,obj->width,obj->height);
-        break;
-    case _imagebig:
-        /* code */
-        kdrawimagebig(dev,screen,obj->data,obj->sdx,obj->sdy
-        ,obj->width,obj->height,obj->d_and_r&_d_mask);
-        break;
-    case _line:
-        /* code */
-        kline(dev,screen,obj->colorck,obj->sdx,obj->sdy
-            ,obj->width,obj->height);
-        break;
+
+void kobjdraw_init(k_draw_device* dev) {
+    (void)dev;
+    draw_table[_fillbox]       = draw_fillbox_wrap;
+    draw_table[_box]           = draw_box_wrap;
+    draw_table[_line]          = draw_line_wrap;
+    draw_table[_string]        = draw_string_wrap;
+    draw_table[_image]         = draw_image_wrap;
+    draw_table[_imagebig]      = draw_imagebig_wrap;
+    draw_table[_ibin]          = draw_imagebin_wrap;
 #if __DRAW_CIRCLE__
-    case _fillcircle: {
-        /* code */
-        uint8_t r = obj->d_and_r&_r_mask;
-        kfillcircle(dev,screen,obj->colorck,obj->sdx+r,obj->sdy+r,r);
-        break;
-    }
+    draw_table[_circle]        = draw_circle_wrap;
+    draw_table[_fillcircle]    = draw_fillcircle_wrap;
+    draw_table[_arc]           = draw_arc_wrap;
+    draw_table[_roundrect]     = draw_rrect_wrap;
+    draw_table[_fillroundrect] = draw_frrect_wrap;
 #endif
-    case _fillbox:
-        /* code */
-        kfillbox(dev,screen,obj->colorck,obj->sdx,obj->sdy,obj->width,obj->height);
-        break;
-#if __DRAW_CIRCLE__
-    case _roundrect: {
-        /* code */
-        uint8_t r = obj->d_and_r&_r_mask;
-        kroundrect(dev,screen,obj->colorck,obj->sdx,obj->sdy
-            ,obj->width,obj->height,r);
-        break;
-    }
-    case _fillroundrect:
-        /* code */
-        kfillroundrect(dev,screen,obj->colorck,obj->sdx,obj->sdy
-            ,obj->width,obj->height,obj->d_and_r&_r_mask);
-        break;
-#endif
-    case _char:
-        /* code */
-        kchar(dev,screen,*(char*)(obj->data),obj->sdx,obj->sdy,obj->colorck,screen->bk);
-        break;
-    default:
-        break;
-    }
+    draw_table[_char]          = draw_char_wrap;
 }
 
-void kobjsdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj,uint8_t num){
-    if(!dev || !screen || !obj)return;
-    for(uint8_t i=0;i<num;i++){
-        if(((obj+i)->_type & (_active|_dirty)) == (_active|_dirty)){
-            kfull(dev,screen,screen->bk,obj[i].sdx,obj[i].sdy,obj[i].width,obj[i].height);
-        }
-    }
-    for(uint8_t i=0;i<num;i++){
-        if(((obj+i)->_type & (_active|_visible)) != (_active|_visible))continue;
-        kobjdraw(dev,screen,obj+i);
-    }
-    for(uint8_t i=0;i<num;i++){
-        obj[i]._type &= ~_dirty;
-    }
+int ksc_set_draw_func(uint8_t idx, draw_fn fn) {
+    if (idx >= 16) return -1;
+    draw_table[idx] = fn;
+    return 0;
 }
 
-void kscreendraw(k_draw_device* dev,KSC_window* screen){
-    if(!dev || !screen)return;
-    kfull(dev,screen,screen->bk,0,0,screen->width,screen->height);
-    kobjsdraw(dev,screen,screen->objbuf,screen->objnum);
+draw_fn ksc_get_draw_func(uint8_t idx) {
+    if (idx >= 16) return NULL;
+    return draw_table[idx];
+}
+
+void kobjdraw(k_draw_device* dev, KSC_window* screen, ksc_obj_t* obj) {
+    if (!dev || !screen || !obj) return;
+    draw_fn fn = draw_table[obj->_type & _type_mask];
+    if (fn) fn(dev, screen, obj);
+}
+
+void kobjsdraw(k_draw_device* dev, KSC_window* screen, ksc_obj_t* objs, uint8_t num) {
+    if (!dev || !screen || !objs) return;
+    for (uint8_t i = 0; i < num; i++)
+        kobjdraw(dev, screen, &objs[i]);
+}
+
+void kscreendraw(k_draw_device* dev, KSC_window* screen) {
+    if (!dev || !screen) return;
+    kfull(dev, screen, screen->bk, 0, 0, screen->width, screen->height);
+    kobjsdraw(dev, screen, screen->objbuf, screen->objnum);
 }
 
 

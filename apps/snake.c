@@ -9,11 +9,11 @@
  * 依赖:    KSCGUI + button16 + tim_clock
  * 平台:    STM32 (__USE_STM32__)
  *
- * 资源占用 (对比: 移除 snake.o 后固件尺寸差值):
- *   ROM(Debug -O0):  3,284 B
- *   ROM(Release -Os): 1,924 B
- *   RAM(静态):  8 B (spawn_food 内的 static uint32_t rnd)
- *   RAM(堆):   约 1 KB (snake_ctx_t, osmalloc 于 appopen)
+ * 资源占用 (LTO差分法)
+ *   ROM(Debug -O0):   3,164 B
+ *   ROM(Release -Os):  1,908 B
+ *   RAM(静态):   8 B (spawn_food 内的 static uint32_t rnd)
+ *   RAM(堆):    约 1 KB (snake_ctx_t, osmalloc 于 appopen)
  *
  * 用户代码:
  *   app_t* g = appget("snake");
@@ -96,6 +96,7 @@ typedef struct {
     uint8_t   paused;
     uint8_t   running;
     uint8_t   hw_opened;   /* 1 = kpd/gui/tmr 已启用 */
+    uint8_t   tile_h;      /* tile 句柄 */
 
 } snake_ctx_t;
 
@@ -168,17 +169,17 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_WALL].width   = COLS * CS;
     ctx->objs[OBJ_WALL].height  = ROWS * CS;
     ctx->objs[OBJ_WALL].colorck = 0x39E7;
-    ctx->objs[OBJ_WALL]._type   = _box | _active | _visible;
+    ctx->objs[OBJ_WALL]._type   = _box;
 
     ctx->objs[OBJ_FOOD].width   = CS;
     ctx->objs[OBJ_FOOD].height  = CS;
     ctx->objs[OBJ_FOOD].colorck = 0xF800;
-    ctx->objs[OBJ_FOOD]._type   = _fillbox | _active;
+    ctx->objs[OBJ_FOOD]._type   = _fillbox;
 
     for (uint16_t i = 0; i < MAX_SNAKE; i++) {
         ctx->objs[OBJ_SNAKE + i].width  = CS;
         ctx->objs[OBJ_SNAKE + i].height = CS;
-        ctx->objs[OBJ_SNAKE + i]._type  = _fillbox | _active;
+        ctx->objs[OBJ_SNAKE + i]._type  = _fillbox;
     }
 
     ctx->objs[OBJ_SCORE].sdx     = 4;
@@ -187,7 +188,7 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_SCORE].height  = 10;
     ctx->objs[OBJ_SCORE].colorck = 0xFFFF;
     ctx->objs[OBJ_SCORE].data    = ctx->score_buf;
-    ctx->objs[OBJ_SCORE]._type   = _string | _active | _visible;
+    ctx->objs[OBJ_SCORE]._type   = _string;
 
     ctx->objs[OBJ_GAMEOVER].sdx     = 60;
     ctx->objs[OBJ_GAMEOVER].sdy     = 110;
@@ -195,7 +196,7 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_GAMEOVER].height  = 10;
     ctx->objs[OBJ_GAMEOVER].colorck = 0xF800;
     ctx->objs[OBJ_GAMEOVER].data    = "GAME OVER";
-    ctx->objs[OBJ_GAMEOVER]._type   = _string | _active;
+    ctx->objs[OBJ_GAMEOVER]._type   = _string;
 
     ctx->objs[OBJ_PAUSE].sdx     = 60;
     ctx->objs[OBJ_PAUSE].sdy     = 130;
@@ -203,37 +204,30 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_PAUSE].height  = 10;
     ctx->objs[OBJ_PAUSE].colorck = 0xFFFF;
     ctx->objs[OBJ_PAUSE].data    = "PAUSED";
-    ctx->objs[OBJ_PAUSE]._type   = _string | _active;
+    ctx->objs[OBJ_PAUSE]._type   = _string;
 
     ctx->objs[OBJ_ERASE].width   = CS;
     ctx->objs[OBJ_ERASE].height  = CS;
     ctx->objs[OBJ_ERASE].colorck = 0x0000;
-    ctx->objs[OBJ_ERASE]._type   = _fillbox | _active;
+    ctx->objs[OBJ_ERASE]._type   = _fillbox;
 }
 
-/* ── 渲染(增量) ── */
+/* ── 渲染(全量) ── */
 
 static void render(snake_ctx_t* ctx, uint8_t ate, uint8_t first_frame)
 {
     uint16_t i;
-
-    for (i = 0; i < MAX_SNAKE; i++)
-        ctx->objs[OBJ_SNAKE + i]._type &= ~(_visible | _dirty);
-    ctx->objs[OBJ_ERASE]._type      &= ~(_visible | _dirty);
-    ctx->objs[OBJ_FOOD]._type       &= ~(_visible | _dirty);
-    ctx->objs[OBJ_SCORE]._type      &= ~(_visible | _dirty);
-    ctx->objs[OBJ_GAMEOVER]._type   &= ~(_visible | _dirty);
-    ctx->objs[OBJ_PAUSE]._type      &= ~(_visible | _dirty);
-
-    ctx->objs[OBJ_ERASE].width  = CS;
-    ctx->objs[OBJ_ERASE].height = CS;
 
     /* 擦除器: 仅在非首帧且未吃食物时设置 */
     if (!first_frame && !ate && ctx->snake_len > 0 &&
         ctx->snake_len < MAX_SNAKE + 1) {
         ctx->objs[OBJ_ERASE].sdx    = ctx->snake[ctx->snake_len].x * CS;
         ctx->objs[OBJ_ERASE].sdy    = ctx->snake[ctx->snake_len].y * CS;
-        ctx->objs[OBJ_ERASE]._type  = _fillbox | _active | _visible | _dirty;
+        ctx->objs[OBJ_ERASE].width  = CS;
+        ctx->objs[OBJ_ERASE].height = CS;
+        ctx->objs[OBJ_ERASE]._type  = _fillbox;
+    } else {
+        ctx->objs[OBJ_ERASE]._type  = 0xFF;  /* 无效索引, 跳过绘制 */
     }
 
     /* 蛇身 */
@@ -242,23 +236,27 @@ static void render(snake_ctx_t* ctx, uint8_t ate, uint8_t first_frame)
         ctx->objs[idx].sdx     = ctx->snake[i].x * CS;
         ctx->objs[idx].sdy     = ctx->snake[i].y * CS;
         ctx->objs[idx].colorck = (i == 0) ? 0x07E0 : 0x0540;
-        ctx->objs[idx]._type   = _fillbox | _active | _visible | _dirty;
+        ctx->objs[idx]._type   = _fillbox;
     }
 
     /* 食物 */
     ctx->objs[OBJ_FOOD].sdx   = ctx->food.x * CS;
     ctx->objs[OBJ_FOOD].sdy   = ctx->food.y * CS;
-    ctx->objs[OBJ_FOOD]._type = _fillbox | _active | _visible | _dirty;
+    ctx->objs[OBJ_FOOD]._type = _fillbox;
 
     /* 分数 */
     snprintf(ctx->score_buf, sizeof(ctx->score_buf), "Score: %u", ctx->score);
-    ctx->objs[OBJ_SCORE]._type = _string | _active | _visible | _dirty;
+    ctx->objs[OBJ_SCORE]._type = _string;
 
     /* GAME OVER / PAUSED */
     if (ctx->game_over)
-        ctx->objs[OBJ_GAMEOVER]._type = _string | _active | _visible | _dirty;
+        ctx->objs[OBJ_GAMEOVER]._type = _string;
     else if (ctx->paused)
-        ctx->objs[OBJ_PAUSE]._type = _string | _active | _visible | _dirty;
+        ctx->objs[OBJ_PAUSE]._type = _string;
+    else {
+        ctx->objs[OBJ_GAMEOVER]._type = 0xFF;
+        ctx->objs[OBJ_PAUSE]._type    = 0xFF;
+    }
 }
 
 /* ── 全量擦除 ── */
@@ -269,7 +267,7 @@ static void render_full_reset(snake_ctx_t* ctx)
     ctx->objs[OBJ_ERASE].sdy     = 0;
     ctx->objs[OBJ_ERASE].width   = COLS * CS;
     ctx->objs[OBJ_ERASE].height  = ROWS * CS;
-    ctx->objs[OBJ_ERASE]._type   = _fillbox | _active | _visible | _dirty;
+    ctx->objs[OBJ_ERASE]._type   = _fillbox;
 }
 
 /* ── 重现初始状态 (重启/首次) ── */
@@ -278,11 +276,11 @@ static void show_initial(snake_ctx_t* ctx)
 {
     /* pass 1: 全量擦除 + 画静态元素 (墙/分数) */
     render_full_reset(ctx);
-    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
+    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
 
     /* pass 2: 画蛇/食物 (首帧, 无擦除器) */
     render(ctx, 0, 1);
-    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
+    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
 }
 
 /* ── TIM4 中断回调 ── */
@@ -311,7 +309,7 @@ static void* tick_cb(void* data)
         if (ctx->game_over) {
             init_game(ctx);
             init_objects(ctx);
-            appioctl(ctx->obj, "setobjs", (int)OBJ_TOTAL, ctx->objs);
+            GUI_SETOBJPOOL(ctx->obj, ctx->tile_h, ctx->objs, OBJ_TOTAL);
             show_initial(ctx);
             return NULL;
         }
@@ -322,9 +320,9 @@ static void* tick_cb(void* data)
             if (!ctx->paused) {
                 /* 取消暂停: 全量擦除后重绘 (PAUSED 文字不再残留) */
                 render_full_reset(ctx);
-                appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
+                GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
                 render(ctx, 0, 1);
-                appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
+                GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
                 return NULL;
             }
             continue;
@@ -351,7 +349,7 @@ static void* tick_cb(void* data)
         render(ctx, 0, 0);
     }
 
-    appioctl(ctx->obj, "drawobjs", (int)OBJ_TOTAL);
+    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
     return NULL;
 }
 
@@ -393,8 +391,8 @@ static int snake_init(app_t* app, int mode)
     if (appopen(ctx->obj) < 0) return -1;
     appioctl(ctx->obj, "init");
     sysdelay(10);
-    int win = appioctl(ctx->obj, "wcreate", 0, 0, 240, 320, 0x0000);
-    appioctl(ctx->obj, "wselect", win);
+    ctx->tile_h = (uint8_t)appioctl(ctx->obj, "wcreate", 0, 0, 240, 320, 0x0000);
+    appioctl(ctx->obj, "wselect", (int)ctx->tile_h);
 
     /* button16 */
     if (appopen(ctx->kpd) < 0) { appclose(ctx->obj); return -1; }
@@ -404,7 +402,7 @@ static int snake_init(app_t* app, int mode)
     /* 游戏初始化 + 首次绘制 */
     init_game(ctx);
     init_objects(ctx);
-    appioctl(ctx->obj, "setobjs", (int)OBJ_TOTAL, ctx->objs);
+    GUI_SETOBJPOOL(ctx->obj, ctx->tile_h, ctx->objs, OBJ_TOTAL);
     show_initial(ctx);
 
     /* TIM4: mode=0x41 设周期, mode=0x42 count=1 启动 */

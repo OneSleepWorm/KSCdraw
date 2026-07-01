@@ -1,7 +1,10 @@
 #ifndef __APP_H__
 #define __APP_H__
 
-#include "dd.h"
+#include <stdint.h>
+#include <stdarg.h>
+
+typedef void* (*void_func_t)(void*);
 
 struct app_t;
 
@@ -32,10 +35,6 @@ typedef struct __attribute__((aligned(16))) papp_t {
 
 typedef struct app_t {
     const papp_t*       papp;
-    dd_t*               dd0;
-    dd_t*               dd1;
-    dd_t*               dd2;
-    dd_t*               dd3;
     struct app_t*       app0;             /* 应用依赖 (appget 递归填充) */
     struct app_t*       app1;
     struct app_t*       app2;
