@@ -13,17 +13,51 @@
  * ============================================================
  * 资源占用 (LTO差分法)
  * ============================================================
- *   ROM(Debug -O0):   2,112 B
- *   ROM(Release -Os):  1,084 B
+ *   ROM(Debug -O0):   2,128 B
+ *   ROM(Release -Os):  1,092 B
  *   RAM(静态):   16 B (uart_owners[4])
- *   RAM(堆):     ~800 B (uart_ring_rx × 3, osmalloc 于 appopen)
+ *   RAM(堆):     ~768 B (uart_rx_ring × 3, osmalloc 于 inst_init)
  *
  * ============================================================
- * 使用方法
+ * appwrite — 发送/控制
+ * ============================================================
+ *   mode = (inst << 4) | op,  inst=1/2/3
+ *
+ *   op=1  data,count        轮询发送 count 字节
+ *   op=2  count=1/0         开/关实例的 RXNE 中断
+ *   op=3  data=&baud,count  设置波特率 (重新计算 BRR)
+ *   op=4  —                 noop (初始化占位)
+ *   op=5  count=1~3         设置 ioctl 默认实例
+ *
+ * ============================================================
+ * appread — 接收
+ * ============================================================
+ *   mode 编码: bits[3:0]=inst, bit6=block, bit7=overflow
+ *
+ *   inst (1/2/3)       非阻塞读，无数据返回 0
+ *   inst | 0x40        阻塞读，空转直到有数据
+ *   inst | 0x80        读 overflow 计数 (count>0 自动清零)
+ *
+ * ============================================================
+ * appioctl — 格式化输出 (到默认实例)
+ * ============================================================
+ *   appioctl(u, "val=%d\r\n", 42);
+ *
+ * ============================================================
+ * 回调 — RX 数据到达通知
+ * ============================================================
+ *   app->callback = on_rx;
+ *   app->user_data = my_ctx;
+ *   // ISR 中环空→非空时回调一次 (中断上下文)
+ *
+ * ============================================================
+ * 典型用法
  * ============================================================
  *   app_t* u = appget("uart_serial");
  *   appopen(u);
- *   appwrite(u, "Hello\r\n", 7, 0x11);  // USART1, mode=1
+ *   appwrite(u, "Hello\r\n", 7, 0x11);   // USART1 轮询发送
+ *   appread(u, buf, 64, 1);               // USART1 非阻塞读
+ *   appread(u, buf, 64, 0x41);            // USART1 阻塞读
  *   appclose(u);
  *
  * ============================================================
@@ -35,16 +69,22 @@
 #include "stm32f1xx.h"
 #include <stdio.h>
 
+/* gpio_port mode constants (CRL/CRH nibble encoding) */
+#define UART_TX_MODE  0x0B  /* push-pull output 50MHz */
+#define UART_RX_MODE  0x04  /* floating input */
+
 #define UART_RX_BUF_SIZE  256
 
 typedef struct {
     volatile uint8_t  buf[UART_RX_BUF_SIZE];
     volatile uint16_t head, tail;
+    volatile uint32_t overflow;
 } uart_rx_ring_t;
 
 typedef struct {
     uint8_t          enabled;       /* bit0=USART1 bit1=USART2 bit2=USART3 */
     uint8_t          dflt_inst;     /* ioctl 默认实例 */
+    uint16_t         brr[3];        /* per-instance BRR value */
     uart_rx_ring_t*  ring[3];
     app_t*           owner[3];      /* ISR 反向查找 app_t */
 } uart_ctx_t;
@@ -60,7 +100,15 @@ static USART_TypeDef* uart_reg(uint8_t inst)
 
 static const IRQn_Type irq_map[] = {USART1_IRQn, USART2_IRQn, USART3_IRQn};
 
-static const uint16_t brr_tbl[] = {625, 312, 312};
+/* BRR = UART_CLK / baud.  USART1 on APB2, USART2/3 on APB1.
+ * Default 115200: USART1=72M/115200=625, USART2/3=36M/115200≈312 */
+#define UART_BAUD_DEFAULT  115200
+static uint16_t uart_brr_compute(uint8_t inst, uint32_t baud)
+{
+    uint32_t pclk = (inst == 1) ? SystemCoreClock : (SystemCoreClock / 2);
+    return (uint16_t)(pclk / baud);
+}
+
 static const uint32_t tx_pin[]  = {9, 2, 26};
 static const uint32_t rx_pin[]  = {10, 3, 27};
 
@@ -76,6 +124,14 @@ static void rcc_enable(uint8_t inst)
     (void)RCC->APB2ENR;
 }
 
+static void uart_tx_raw(USART_TypeDef* uart, const uint8_t* buf, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        while (!(uart->SR & USART_SR_TXE));
+        uart->DR = buf[i];
+    }
+}
+
 static void inst_init(app_t* app, uint8_t inst)
 {
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
@@ -87,16 +143,17 @@ static void inst_init(app_t* app, uint8_t inst)
     if (!ctx->ring[inst - 1]) return;
     ctx->ring[inst - 1]->head = 0;
     ctx->ring[inst - 1]->tail = 0;
+    ctx->ring[inst - 1]->overflow = 0;
 
     rcc_enable(inst);
 
     if (app->app0) appopen(app->app0);
 
-    appwrite(app->app0, NULL, (tx_pin[inst - 1] << 4) | 0xB, 1);
-    appwrite(app->app0, NULL, (rx_pin[inst - 1] << 4) | 0x4, 1);
+    appwrite(app->app0, NULL, (tx_pin[inst - 1] << 4) | UART_TX_MODE, 1);
+    appwrite(app->app0, NULL, (rx_pin[inst - 1] << 4) | UART_RX_MODE, 1);
 
     USART_TypeDef* uart = uart_reg(inst);
-    uart->BRR = brr_tbl[inst - 1];
+    uart->BRR = ctx->brr[inst - 1];
     uart->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
 
     NVIC_SetPriority(irq_map[inst - 1], 0);
@@ -113,8 +170,11 @@ static int uart_app_open(app_t* app)
     if (!ctx) return -1;
     ctx->enabled    = 0;
     ctx->dflt_inst  = 1;
-    for (int i = 0; i < 3; i++) ctx->ring[i] = NULL;
-    for (int i = 0; i < 3; i++) ctx->owner[i] = NULL;
+    for (int i = 0; i < 3; i++) {
+        ctx->brr[i] = uart_brr_compute((uint8_t)(i + 1), UART_BAUD_DEFAULT);
+        ctx->ring[i] = NULL;
+        ctx->owner[i] = NULL;
+    }
     app->app_data = ctx;
     return 0;
 }
@@ -149,6 +209,7 @@ static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 
     uint32_t inst = mode >> 4;
     uint32_t op   = mode & 0x0F;
+    if (inst == 0) inst = ctx->dflt_inst;
     if (inst < 1 || inst > 3) return -1;
 
     inst_init(app, (uint8_t)inst);
@@ -158,16 +219,10 @@ static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 
     switch (op) {
     case 0:
-        return 1;
-
-    case 1: {
-        uint8_t* p = (uint8_t*)data;
-        for (uint32_t i = 0; i < count; i++) {
-            while (!(uart->SR & USART_SR_TXE));
-            uart->DR = p[i];
-        }
+    case 1:
+        if (!data || count == 0) return 0;
+        uart_tx_raw(uart, (const uint8_t*)data, count);
         return (int)count;
-    }
 
     case 2:
         if (count)
@@ -175,6 +230,15 @@ static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         else
             uart->CR1 &= ~USART_CR1_RXNEIE;
         return 1;
+
+    case 3: {
+        uint32_t baud = data ? *(uint32_t*)data : count;
+        if (baud < 1200) return -1;
+        ctx->brr[inst - 1] = uart_brr_compute((uint8_t)inst, baud);
+        if (ctx->enabled & (1 << (inst - 1)))
+            uart->BRR = ctx->brr[inst - 1];
+        return 1;
+    }
 
     case 4:
         return 1;
@@ -187,13 +251,24 @@ static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 static int uart_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
-    if (!ctx || !data || !count) return 0;
+    if (!ctx || !data) return 0;
 
-    uint32_t inst = mode;
+    uint32_t inst = mode & 0x0F;
     if (inst < 1 || inst > 3) return 0;
     if (!(ctx->enabled & (1 << (inst - 1)))) return 0;
 
     uart_rx_ring_t* r = ctx->ring[inst - 1];
+
+    if (mode & 0x80) {
+        *(uint32_t*)data = r->overflow;
+        if (count) r->overflow = 0;
+        return sizeof(uint32_t);
+    }
+
+    if (mode & 0x40)
+        while (r->head == r->tail);
+
+    if (!count) return 0;
     uint32_t read = 0;
     while (read < count && r->head != r->tail) {
         ((uint8_t*)data)[read++] = r->buf[r->tail];
@@ -210,15 +285,12 @@ static int uart_app_ioctl(app_t* app, const char* fmt, va_list ap)
     uint8_t inst = ctx->dflt_inst;
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
 
-    USART_TypeDef* uart = uart_reg(inst);
     char buf[128];
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     if (n > 0) {
         size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        for (size_t i = 0; i < len; i++) {
-            while (!(uart->SR & USART_SR_TXE));
-            uart->DR = (uint8_t)buf[i];
-        }
+        USART_TypeDef* uart = uart_reg(inst);
+        uart_tx_raw(uart, (const uint8_t*)buf, len);
     }
     return n;
 }
@@ -246,11 +318,16 @@ static void uart_irq_handler(int idx)
         uint8_t c = (uint8_t)uart->DR;
         uart_rx_ring_t* r = ctx->ring[idx];
         if (r) {
+            uint8_t was_empty = (r->head == r->tail);
             uint16_t next = (uint16_t)((r->head + 1) & (UART_RX_BUF_SIZE - 1));
             if (next != r->tail) {
                 r->buf[r->head] = c;
                 r->head = next;
+            } else {
+                r->overflow++;
             }
+            if (was_empty && app->callback)
+                app->callback(app->user_data);
         }
     }
 }
