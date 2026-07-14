@@ -13,10 +13,10 @@ extern volatile uint32_t KSCOSsystem_Clock;
 
 #if __USE_STM32__
 #include "app.h"
+#include <stdarg.h>
 extern app_t* ksc_console;
 extern volatile uint32_t sys_tick_ms;
-#define kscprintf(fmt, ...) \
-    do { if (ksc_console) appioctl(ksc_console, fmt, ##__VA_ARGS__); } while(0)
+void kscprintf(const char* fmt, ...);
 #else
 extern dd_t* ksc_console;
 #define kscprintf(fmt, ...) \

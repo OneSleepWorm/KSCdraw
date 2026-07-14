@@ -116,6 +116,7 @@
 #include "../inc/KSCfont.h"
 #include "../inc/list.h"
 #include <string.h>
+#include <stdlib.h>
 
 #if __USE_STM32__
 
@@ -478,11 +479,14 @@ static int handler_init(list_ctx_t* ctx, va_list ap)
     if (ctx->hw_opened) return -1;
     if (appopen(ctx->gui) < 0) return -1;
 
-    appioctl(ctx->gui, "init");
+    appcmd(ctx->gui, "init");
     sysdelay(10);
-    ctx->tile = (tile_h_t)(uint8_t)appioctl(ctx->gui, "wcreate",
-                  (int)ctx->x, (int)ctx->y, (int)ctx->w, (int)ctx->h, (int)ctx->bg);
-    appioctl(ctx->gui, "wselect", (int)ctx->tile);
+    { char _b[80]; snprintf(_b, sizeof(_b), "wcreate -x %d -y %d -w %d -h %d -c %04X",
+        ctx->x, ctx->y, ctx->w, ctx->h, ctx->bg);
+      appcmd(ctx->gui, _b);
+      ctx->tile = (tile_h_t)(uintptr_t)ctx->gui->callback_data; }
+    ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+    appcmd(ctx->gui, "wselect");
     ctx->hw_opened = 1;
 
     obj_sync(ctx);
@@ -579,8 +583,11 @@ static int handler_setpos(list_ctx_t* ctx, va_list ap)
     ctx->w = p->w; ctx->h = p->h;
     ctx->item_h = p->item_h ? p->item_h : (uint8_t)(Systemfont0.height + 4);
     if (ctx->hw_opened) {
-        appioctl(ctx->gui, "wmove", (int)ctx->tile, (int)ctx->x, (int)ctx->y);
-        appioctl(ctx->gui, "wresize", (int)ctx->tile, (int)ctx->w, (int)ctx->h);
+        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+        { char _b[64]; snprintf(_b, sizeof(_b), "wmove -x %d -y %d", ctx->x, ctx->y);
+          appcmd(ctx->gui, _b); }
+        { char _b[64]; snprintf(_b, sizeof(_b), "wresize -w %d -h %d", ctx->w, ctx->h);
+          appcmd(ctx->gui, _b); }
     }
     return 1;
 }
@@ -593,7 +600,9 @@ static int handler_setcolors(list_ctx_t* ctx, va_list ap)
     ctx->fg     = c->fg;
     ctx->sel_fg = c->sel_fg;
     if (ctx->hw_opened) {
-        appioctl(ctx->gui, "wbk", (int)ctx->tile, (int)ctx->bg);
+        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+        { char _b[48]; snprintf(_b, sizeof(_b), "wbk -c %04X", ctx->bg);
+          appcmd(ctx->gui, _b); }
         obj_sync(ctx);
         list_render(ctx);
     }
@@ -619,6 +628,201 @@ static int handler_setstyle(list_ctx_t* ctx, va_list ap)
         list_render(ctx);
     }
     return 1;
+}
+
+/* ── appcmd handlers ── */
+
+static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    if (ctx->hw_opened) return -1;
+    if (appopen(ctx->gui) < 0) return -1;
+    appcmd(ctx->gui, "init");
+    sysdelay(10);
+    { char _b[80]; snprintf(_b, sizeof(_b), "wcreate -x %d -y %d -w %d -h %d -c %04X",
+        ctx->x, ctx->y, ctx->w, ctx->h, ctx->bg);
+      appcmd(ctx->gui, _b);
+      ctx->tile = (tile_h_t)(uintptr_t)ctx->gui->callback_data; }
+    ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+    appcmd(ctx->gui, "wselect");
+    ctx->hw_opened = 1;
+    obj_sync(ctx);
+    list_render(ctx);
+    return 1;
+}
+
+static int cmd_add(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 'd')) return -1;
+    const char* s = argv[APPCMD_ARG('d')];
+    if (!s || !*s) return -1;
+    int r = pool_add(ctx, s);
+    if (ctx->hw_opened && r > 0) { obj_sync(ctx); list_render(ctx); }
+    return r;
+}
+
+static int cmd_remove(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 'i')) return -1;
+    int idx = (int)strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (idx < 0 || idx >= ctx->count) return -1;
+    pool_remove(ctx, (uint8_t)idx);
+    if (ctx->hw_opened && ctx->count > 0) { obj_sync(ctx); list_render(ctx); }
+    return 1;
+}
+
+static int cmd_clear(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    ctx->count = 0; ctx->selected = 0; ctx->scroll_ofs = 0;
+    ctx->data_used = 0; ctx->frag_count = 0;
+    obj_sync(ctx);
+    if (ctx->hw_opened) list_render(ctx);
+    return 1;
+}
+
+static int cmd_compact(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    frag_compact(ctx);
+    if (ctx->hw_opened) { obj_sync(ctx); list_render(ctx); }
+    return 1;
+}
+
+static int cmd_select(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 'i')) return -1;
+    int idx = (int)strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    return do_select(ctx, (uint8_t)idx);
+}
+
+static int cmd_confirm(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    if (ctx->app && ctx->app->callback)
+        ctx->app->callback(ctx->app->user_data);
+    return 1;
+}
+
+static int cmd_move(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 'n')) return -1;
+    int delta = (int)strtol(argv[APPCMD_ARG('n')], NULL, 0);
+    return do_move(ctx, delta);
+}
+
+static int cmd_getcount(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    return (int)ctx->count;
+}
+
+static int cmd_getlabel(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 'i')) return -1;
+    int idx = (int)strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (idx < 0 || idx >= ctx->count) return -1;
+    const char* s = ctx->data_buf + ctx->offsets[idx];
+    int len = (int)strlen(s) + 1;
+    if (app->user_data) memcpy(app->user_data, s, (size_t)len);
+    return len;
+}
+
+static int cmd_setpos(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (APPCMD_HAS(argv, 'x')) ctx->x = (uint8_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
+    if (APPCMD_HAS(argv, 'y')) ctx->y = (uint8_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
+    if (APPCMD_HAS(argv, 'w')) ctx->w = (uint8_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
+    if (APPCMD_HAS(argv, 'h')) ctx->h = (uint8_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
+    if (APPCMD_HAS(argv, 't')) ctx->item_h = (uint8_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (ctx->hw_opened) {
+        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+        { char _b[64]; snprintf(_b, sizeof(_b), "wmove -x %d -y %d", ctx->x, ctx->y);
+          appcmd(ctx->gui, _b); }
+        { char _b[64]; snprintf(_b, sizeof(_b), "wresize -w %d -h %d", ctx->w, ctx->h);
+          appcmd(ctx->gui, _b); }
+    }
+    return 1;
+}
+
+static int cmd_setcolors(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (APPCMD_HAS(argv, 'a')) ctx->sel_bg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    if (APPCMD_HAS(argv, 'b')) ctx->bg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('b')], NULL, 16);
+    if (APPCMD_HAS(argv, 'c')) ctx->fg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
+    if (APPCMD_HAS(argv, 'd')) ctx->sel_fg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('d')], NULL, 16);
+    if (ctx->hw_opened) {
+        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
+        { char _b[48]; snprintf(_b, sizeof(_b), "wbk -c %04X", ctx->bg);
+          appcmd(ctx->gui, _b); }
+        obj_sync(ctx);
+        list_render(ctx);
+    }
+    return 1;
+}
+
+static int cmd_setstyle(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app;
+    if (!APPCMD_HAS(argv, 's')) return -1;
+    int style = (int)strtoul(argv[APPCMD_ARG('s')], NULL, 0);
+    if (style < LIST_STYLE_NONE || style > LIST_STYLE_ARROW) return -1;
+    ctx->sel_style = (uint8_t)style;
+    if (ctx->hw_opened) { obj_sync(ctx); list_render(ctx); }
+    return 1;
+}
+
+static int cmd_refresh(app_t* app, list_ctx_t* ctx, const char** argv)
+{
+    (void)app; (void)argv;
+    obj_sync(ctx);
+    list_render(ctx);
+    return 1;
+}
+
+/* ── appcmd dispatch ── */
+
+typedef int (*list_cmd_handler_t)(app_t*, list_ctx_t*, const char**);
+
+typedef struct {
+    const char*          name;
+    list_cmd_handler_t   handler;
+} list_cmd_entry_t;
+
+static const list_cmd_entry_t cmd_table_new[] = {
+    {"init",      cmd_init},
+    {"add",       cmd_add},
+    {"remove",    cmd_remove},
+    {"clear",     cmd_clear},
+    {"compact",   cmd_compact},
+    {"select",    cmd_select},
+    {"confirm",   cmd_confirm},
+    {"move",      cmd_move},
+    {"getcount",  cmd_getcount},
+    {"getlabel",  cmd_getlabel},
+    {"setpos",    cmd_setpos},
+    {"setcolors", cmd_setcolors},
+    {"setstyle",  cmd_setstyle},
+    {"refresh",   cmd_refresh},
+};
+
+static int list_cmd(app_t* app, const char* cmdname, const char** argv)
+{
+    list_ctx_t* ctx = (list_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+
+    for (size_t i = 0; i < sizeof(cmd_table_new) / sizeof(cmd_table_new[0]); i++) {
+        if (strcmp(cmdname, cmd_table_new[i].name) == 0)
+            return cmd_table_new[i].handler(app, ctx, argv);
+    }
+    return -1;
 }
 
 /* ── 命令表 ── */
@@ -703,7 +907,7 @@ static const papp_ops_t list_ops = {
     .close = list_close,
     .read  = list_read,
     .write = list_write,
-    .ioctl = list_ioctl,
+    .cmd   = list_cmd,
 };
 
 REGISTER_APP_EX("list", NULL, "1\0KSCGUI",

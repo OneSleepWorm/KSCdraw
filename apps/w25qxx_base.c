@@ -156,10 +156,10 @@ static int w25_app_open(app_t* app)
 
     appopen(ctx->sspi);
 
-    ctx->dev_id = appioctl(ctx->sspi, "reg", 2);
+    ctx->dev_id = appcmd(ctx->sspi, "reg -i 2");
     if (ctx->dev_id < 0) { appclose(ctx->sspi); osfree(ctx); return -1; }
-    appioctl(ctx->sspi, "setpin", 2, ctx->dev_id, SSPI_CS, CS_PIN);
-    appioctl(ctx->sspi, "setpin", 2, ctx->dev_id, SSPI_R1, RST_PIN);
+    sspi_setpin(ctx->sspi, 2, ctx->dev_id, SSPI_CS, CS_PIN);
+    sspi_setpin(ctx->sspi, 2, ctx->dev_id, SSPI_R1, RST_PIN);
 
     uint8_t cmd = 0x9F, id[3];
     w25_cs_low(ctx);

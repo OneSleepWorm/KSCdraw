@@ -383,17 +383,17 @@ static int gui_open(app_t* app)
     if (!ctx->sspi) { osfree(ctx); return -1; }
     if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
 
-    ctx->spi_dev[0] = appioctl(ctx->sspi, "reg", 1);
+    ctx->spi_dev[0] = appcmd(ctx->sspi, "reg -i 1");
     if (ctx->spi_dev[0] < 0) { osfree(ctx); return -1; }
-    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_CS,  4);
-    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_DC,  2);
-    appioctl(ctx->sspi, "setpin", 1, ctx->spi_dev[0], SSPI_R1,  3);
+    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_CS,  4);
+    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_DC,  2);
+    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_R1,  3);
 
-    ctx->spi_dev[1] = appioctl(ctx->sspi, "reg", 2);
+    ctx->spi_dev[1] = appcmd(ctx->sspi, "reg -i 2");
     if (ctx->spi_dev[1] < 0) { osfree(ctx); return -1; }
-    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_CS, 12);
-    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_DC,  8);
-    appioctl(ctx->sspi, "setpin", 2, ctx->spi_dev[1], SSPI_R1,  9);
+    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_CS, 12);
+    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_DC,  8);
+    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_R1,  9);
 
     /* Default SPI: SPI2 first */
     ctx->sspi_inst = 2;
@@ -1218,12 +1218,23 @@ static int cmd_frrect(app_t* app, const char** argv)
 }
 #endif
 
+static tile_h_t resolve_tile_handle(app_t* app, gui_ctx_t* ctx, const char** argv);
+
 static int cmd_wclear(app_t* app, const char** argv)
 {
-    (void)argv;
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx->active_handle) return -1;
-    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    int slot;
+    if (h) {
+        slot = tile_slot_by_handle(ctx, h);
+    } else if (ctx->active_handle) {
+        slot = ctx->active_slot;
+    } else {
+        return -1;
+    }
+    if (slot < 0) return 0;
+    KSC_window* scr = &ctx->tiles[slot].win;
     kfull(&ctx->dev, scr, scr->bk, 0, 0, scr->width, scr->height);
     return 1;
 }
@@ -1242,6 +1253,15 @@ static int cmd_clear(app_t* app, const char** argv)
 /* ================================================================
  * appcmd: tile lifecycle
  * ================================================================ */
+
+static tile_h_t resolve_tile_handle(app_t* app, gui_ctx_t* ctx, const char** argv)
+{
+    if (APPCMD_HAS(argv, 't'))
+        return (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (app->mode_data)
+        return (tile_h_t)(uintptr_t)app->mode_data;
+    return ctx->active_handle;
+}
 
 static int cmd_wcreate(app_t* app, const char** argv)
 {
@@ -1264,14 +1284,16 @@ static int cmd_wcreate(app_t* app, const char** argv)
     t->z = max_z + 1;
     tile_h_t hnd = TILE_MAKE_HANDLE(t->gen, (uint8_t)slot);
     kfull(&ctx->dev, &t->win, t->win.bk, 0, 0, t->win.width, t->win.height);
+    app->callback_data = (void*)(uintptr_t)hnd;
     return (int)(uint8_t)hnd;
 }
 
 static int cmd_wdelete(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     uint8_t was_active = (ctx->active_handle == h) ? 1 : 0;
@@ -1283,8 +1305,9 @@ static int cmd_wdelete(app_t* app, const char** argv)
 static int cmd_wselect(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->active_handle = h;
@@ -1299,8 +1322,9 @@ static int cmd_wselect(app_t* app, const char** argv)
 static int cmd_whide(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].flags &= ~TILE_F_VISIBLE;
@@ -1310,8 +1334,9 @@ static int cmd_whide(app_t* app, const char** argv)
 static int cmd_wshew(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].flags |= TILE_F_VISIBLE;
@@ -1321,8 +1346,9 @@ static int cmd_wshew(app_t* app, const char** argv)
 static int cmd_wtoggle(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].flags ^= TILE_F_VISIBLE;
@@ -1336,8 +1362,9 @@ static int cmd_wtoggle(app_t* app, const char** argv)
 static int cmd_wmove(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't') || !APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx || !APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y')) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].win.ssx = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
@@ -1348,8 +1375,9 @@ static int cmd_wmove(app_t* app, const char** argv)
 static int cmd_wresize(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't') || !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx || !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h')) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].win.width = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
@@ -1360,8 +1388,9 @@ static int cmd_wresize(app_t* app, const char** argv)
 static int cmd_wbk(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't') || !APPCMD_HAS(argv, 'c')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx || !APPCMD_HAS(argv, 'c')) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].win.bk = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
@@ -1371,8 +1400,9 @@ static int cmd_wbk(app_t* app, const char** argv)
 static int cmd_wzorder(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't') || !APPCMD_HAS(argv, 'z')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx || !APPCMD_HAS(argv, 'z')) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].z = (uint8_t)strtoul(argv[APPCMD_ARG('z')], NULL, 0);
@@ -1394,12 +1424,13 @@ static int cmd_wactive(app_t* app, const char** argv)
 static int cmd_winfo(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     tile_t* t = &ctx->tiles[slot];
-    tile_info_t* info = (tile_info_t*)app->callback_data;
+    tile_info_t* info = (tile_info_t*)app->user_data;
     if (!info) return 0;
     info->handle = h;
     info->x = t->win.ssx;
@@ -1420,7 +1451,7 @@ static int cmd_wenum(app_t* app, const char** argv)
     gui_ctx_t* ctx = app->app_data;
     if (!ctx) return -1;
     tile_h_t* buf = (tile_h_t*)app->user_data;
-    int* count_ptr = (int*)app->callback_data;
+    int* count_ptr = (int*)app->mode_data;
     if (!buf || !count_ptr) return 0;
     int max_out = *count_ptr;
     int written = 0;
@@ -1453,8 +1484,9 @@ static int cmd_trenderall(app_t* app, const char** argv)
 static int cmd_tredraw(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     tile_t* t = &ctx->tiles[slot];
@@ -1475,8 +1507,9 @@ static int cmd_trender(app_t* app, const char** argv)
 static int cmd_setobjpool(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't') || !APPCMD_HAS(argv, 'n')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx || !APPCMD_HAS(argv, 'n')) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     ctx->tiles[slot].win.objbuf = (ksc_obj_t*)app->user_data;
@@ -1487,8 +1520,9 @@ static int cmd_setobjpool(app_t* app, const char** argv)
 static int cmd_getobjpool(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
-    if (!ctx || !APPCMD_HAS(argv, 't')) return -1;
-    tile_h_t h = (tile_h_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (!ctx) return -1;
+    tile_h_t h = resolve_tile_handle(app, ctx, argv);
+    if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     if (app->user_data) *(int*)app->user_data = (int)ctx->tiles[slot].win.objnum;
@@ -1725,7 +1759,6 @@ static const papp_ops_t kscgui_ops = {
     .open  = gui_open,
     .close = gui_close,
     .write = gui_write,
-    .ioctl = gui_ioctl,
     .cmd   = gui_cmd,
 };
 

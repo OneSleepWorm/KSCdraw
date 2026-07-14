@@ -2,6 +2,7 @@
 #define __SUPER_SPI_V2_H__
 
 #include <stdint.h>
+#include "app.h"
 
 #define SSPI_PIN_NONE   0xFF
 
@@ -39,5 +40,7 @@ typedef struct {
     void*    rx_buf;
     uint16_t rx_len;
 } spi_xfer_t;
+
+int sspi_setpin(app_t* sspi, int inst, int dev_id, int sel, int pin);
 
 #endif

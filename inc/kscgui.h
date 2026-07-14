@@ -1,6 +1,7 @@
 #ifndef __KSCGUI_H__
 #define __KSCGUI_H__
 
+#include <stdio.h>      /* snprintf */
 #include "app.h"
 #include "KSCdraw.h"   /* ksc_obj_t 类型 */
 
@@ -163,7 +164,12 @@ typedef struct {
 
 /* 填充矩形区域
  * g: app_t* 句柄, x,y: 左上, w,h: 宽高, c: KSCCOLOR */
-#define GUI_FILL(g,x,y,w,h,c)    appioctl(g, "fill", (int)(x),(int)(y),(int)(w),(int)(h),(int)(c))
+#define GUI_FILL(g,x,y,w,h,c) do { \
+    char _b[72]; \
+    snprintf(_b, sizeof(_b), "fill -x %d -y %d -w %d -h %d -c %04X", \
+        (int)(x), (int)(y), (int)(w), (int)(h), (unsigned)(c)); \
+    appcmd((g), _b); \
+} while(0)
 
 /* 绘制矩形边框
  * g: app_t* 句柄, x,y: 左上, w,h: 宽高, c: KSCCOLOR */
@@ -199,7 +205,12 @@ typedef struct {
 
 /* 画单字符
  * g: app_t* 句柄, x,y: 左上, ch: 字符, fg: 前景色, bg: 背景色 */
-#define GUI_CHAR(g,x,y,ch,fg,bg) appioctl(g, "char", (int)(x),(int)(y),(int)(ch),(int)(fg),(int)(bg))
+#define GUI_CHAR(g,x,y,ch,fg,bg) do { \
+    char _b[72]; \
+    snprintf(_b, sizeof(_b), "char -x %d -y %d -v %d -c %04X -b %04X", \
+        (int)(x), (int)(y), (unsigned char)(ch), (unsigned)(fg), (unsigned)(bg)); \
+    appcmd((g), _b); \
+} while(0)
 
 /* 画字符串
  * g: app_t* 句柄, x,y: 左上, s: const char* 字符串, fg: 前景色, bg: 背景色 */
@@ -262,7 +273,13 @@ typedef struct {
  * g: app_t* 句柄, h: tile_h_t, o: ksc_obj_t* 数组, n: 数量
  * 注册后 tile->win.objbuf/objnum 指向此数组，
  * GUI_TREDRAW/trenderall 使用此地址 */
-#define GUI_SETOBJPOOL(g,h,o,n)  appioctl(g, "setobjpool", (int)(h), (ksc_obj_t*)(o), (int)(n))
+#define GUI_SETOBJPOOL(g,h,o,n) do { \
+    (g)->mode_data = (void*)(uintptr_t)(h); \
+    (g)->user_data = (void*)(o); \
+    char _b[32]; \
+    snprintf(_b, sizeof(_b), "setobjpool -n %d", (int)(n)); \
+    appcmd((g), _b); \
+} while(0)
 
 /* 读取 tile 的 obj 池指针和数量（低频，走 ioctl）
  * g: app_t* 句柄, h: tile_h_t, c: int* 输出数量

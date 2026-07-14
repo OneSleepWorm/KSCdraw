@@ -24,14 +24,15 @@
  *
  *   appopen(spi)    : 使能 RCC, 初始化 DMA 状态
  *
- *   appioctl(spi, "reg", spi_inst) → int dev_id
- *     spi_inst=1(SPI1) / 2(SPI2)
+ *   appcmd(spi, "reg -i <inst>") → int dev_id
+ *     inst=1(SPI1) / 2(SPI2)
  *     注册一个设备, 返回设备号 (0..SSPI_DEV_MAX-1, 每实例独立)
  *
- *   appioctl(spi, "setpin", spi_inst, dev_id, sel, gpio_pin)
+ *   sspi_setpin(spi, inst, dev_id, sel, pin)
+ *     (或 appcmd(spi, "setpin -i <inst> -d <dev_id> -s <sel> -p <pin>"))
  *     设置设备的某个逻辑引脚 (走 gpio_port app)
  *     sel: SSPI_CS=0, SSPI_DC=1, SSPI_R1=2, SSPI_R2=3
- *     gpio_pin: 引脚号 (0-15, 内部自动加 gpio_port 偏移)
+ *     pin: 引脚号 (0-15, 内部自动加 gpio_port 偏移)
  *
  *   appwrite(spi, data, count, SSPI_MODE(spi_inst, dev_id, op))
  *     见 mode 表
@@ -68,10 +69,10 @@
  *   app_t* spi = appget("super_spi");
  *   appopen(spi);
  *
- *   int tft1 = appioctl(spi, "reg", 1);  // SPI1
- *   appioctl(spi, "setpin", 1, tft1, SSPI_CS,  4);
- *   appioctl(spi, "setpin", 1, tft1, SSPI_DC,  2);
- *   appioctl(spi, "setpin", 1, tft1, SSPI_R1,  3);
+ *   int tft1 = appcmd(spi, "reg -i 1");  // SPI1
+ *   sspi_setpin(spi, 1, tft1, SSPI_CS,  4);
+ *   sspi_setpin(spi, 1, tft1, SSPI_DC,  2);
+ *   sspi_setpin(spi, 1, tft1, SSPI_R1,  3);
  *
  *   appwrite(spi, NULL, 0, SSPI_MODE(1, tft1, SSPI_PULSE_R1));
  *
@@ -81,8 +82,8 @@
  *   uint8_t buf[1024];
  *   appwrite(spi, buf, 1024, SSPI_MODE(1, tft1, SSPI_SEND_DAT_DMA));
  *
- *   int tft2 = appioctl(spi, "reg", 2);  // SPI2
- *   appioctl(spi, "setpin", 2, tft2, SSPI_CS, 12);
+ *   int tft2 = appcmd(spi, "reg -i 2");  // SPI2
+ *   sspi_setpin(spi, 2, tft2, SSPI_CS, 12);
  *   appwrite(spi, buf, 1024, SSPI_MODE(2, tft2, SSPI_SEND_DAT_DMA));
  *
  *   appclose(spi);
@@ -250,51 +251,6 @@ static int sspi_app_close(app_t* app)
 {
     if (app->app_data) osfree(app->app_data);
     app->app_data = NULL;
-    return 0;
-}
-
-static int sspi_app_ioctl(app_t* app, const char* fmt, va_list ap)
-{
-    sspi_ctx_t* ctx = (sspi_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-
-    if (strcmp(fmt, "reg") == 0) {
-        int spi_inst = va_arg(ap, int);
-        if (spi_inst < 1 || spi_inst > 2) return -1;
-        uint8_t idx = (uint8_t)(spi_inst - 1);
-        if (ctx->dev_count[idx] >= SSPI_DEV_MAX) return -1;
-        int id = ctx->dev_count[idx]++;
-        ctx->dev[idx][id].cs_pin = SSPI_PIN_NONE;
-        ctx->dev[idx][id].dc_pin = SSPI_PIN_NONE;
-        ctx->dev[idx][id].r1_pin = SSPI_PIN_NONE;
-        ctx->dev[idx][id].r2_pin = SSPI_PIN_NONE;
-        return id;
-    }
-
-    if (strcmp(fmt, "setpin") == 0) {
-        int spi_inst = va_arg(ap, int);
-        int dev_id   = va_arg(ap, int);
-        int sel      = va_arg(ap, int);
-        int pin      = va_arg(ap, int);
-        if (spi_inst < 1 || spi_inst > 2) return -1;
-        uint8_t idx = (uint8_t)(spi_inst - 1);
-        if (dev_id < 0 || dev_id >= (int)ctx->dev_count[idx]) return -1;
-
-        uint8_t* p;
-        switch (sel) {
-            case SSPI_CS: p = &ctx->dev[idx][dev_id].cs_pin; break;
-            case SSPI_DC: p = &ctx->dev[idx][dev_id].dc_pin; break;
-            case SSPI_R1: p = &ctx->dev[idx][dev_id].r1_pin; break;
-            case SSPI_R2: p = &ctx->dev[idx][dev_id].r2_pin; break;
-            default: return -1;
-        }
-        *p = (uint8_t)pin;
-        uint32_t abs_pin = ctx->inst[idx].gpio_base + (uint8_t)pin;
-        gpio_cfg_out(app->app0, abs_pin);
-        gpio_set(app->app0, abs_pin, 1);
-        return 1;
-    }
-
     return 0;
 }
 
@@ -499,12 +455,85 @@ static int cmd_tx(app_t* app, const char** argv)
     return n;
 }
 
+/* reg: 注册设备 — -i inst */
+static int cmd_reg(app_t* app, const char** argv)
+{
+    sspi_ctx_t* ctx = (sspi_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    int inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 2) return -1;
+    uint8_t idx = (uint8_t)(inst - 1);
+    if (ctx->dev_count[idx] >= SSPI_DEV_MAX) return -1;
+    int id = ctx->dev_count[idx]++;
+    ctx->dev[idx][id].cs_pin = SSPI_PIN_NONE;
+    ctx->dev[idx][id].dc_pin = SSPI_PIN_NONE;
+    ctx->dev[idx][id].r1_pin = SSPI_PIN_NONE;
+    ctx->dev[idx][id].r2_pin = SSPI_PIN_NONE;
+    return id;
+}
+
+/* setpin: 设置设备引脚 — -i inst -d dev_id -s sel -p pin */
+static int cmd_setpin(app_t* app, const char** argv)
+{
+    sspi_ctx_t* ctx = (sspi_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    if (!APPCMD_HAS(argv, 'i') || !APPCMD_HAS(argv, 'd') ||
+        !APPCMD_HAS(argv, 's') || !APPCMD_HAS(argv, 'p')) return -1;
+    int inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    int dev_id = strtoul(argv[APPCMD_ARG('d')], NULL, 0);
+    int sel = strtoul(argv[APPCMD_ARG('s')], NULL, 0);
+    int pin = strtoul(argv[APPCMD_ARG('p')], NULL, 0);
+    if (inst < 1 || inst > 2) return -1;
+    uint8_t idx = (uint8_t)(inst - 1);
+    if (dev_id < 0 || dev_id >= (int)ctx->dev_count[idx]) return -1;
+
+    uint8_t* p;
+    switch (sel) {
+        case SSPI_CS: p = &ctx->dev[idx][dev_id].cs_pin; break;
+        case SSPI_DC: p = &ctx->dev[idx][dev_id].dc_pin; break;
+        case SSPI_R1: p = &ctx->dev[idx][dev_id].r1_pin; break;
+        case SSPI_R2: p = &ctx->dev[idx][dev_id].r2_pin; break;
+        default: return -1;
+    }
+    *p = (uint8_t)pin;
+    uint32_t abs_pin = ctx->inst[idx].gpio_base + (uint8_t)pin;
+    gpio_cfg_out(app->app0, abs_pin);
+    gpio_set(app->app0, abs_pin, 1);
+    return 1;
+}
+
+/* sspi_setpin: 便捷封装 - 手动组装命令字符串，避免 sprintf */
+int sspi_setpin(app_t* sspi, int inst, int dev_id, int sel, int pin)
+{
+    char b[40];
+    int n = 0;
+    const char* p = "setpin -i ";
+    while (*p) b[n++] = *p++;
+    b[n++] = '0' + inst;
+    p = " -d ";
+    while (*p) b[n++] = *p++;
+    if (dev_id >= 10) b[n++] = '0' + (dev_id / 10);
+    b[n++] = '0' + (dev_id % 10);
+    p = " -s ";
+    while (*p) b[n++] = *p++;
+    if (sel >= 10) b[n++] = '0' + (sel / 10);
+    b[n++] = '0' + (sel % 10);
+    p = " -p ";
+    while (*p) b[n++] = *p++;
+    if (pin >= 10) b[n++] = '0' + (pin / 10);
+    b[n++] = '0' + (pin % 10);
+    b[n] = '\0';
+    return appcmd(sspi, b);
+}
+
 /* appcmd dispatch table — 命令名 → handler */
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } sspi_cmd_t;
 
 static const sspi_cmd_t sspi_cmds[] = {
     {"init", cmd_init}, /* 初始化 SPI 实例 -i inst [-b br] */
     {"tx",   cmd_tx},   /* SPI 全双工收发  -i inst -n <count> | -m */
+    {"reg",  cmd_reg},  /* 注册设备 -i inst */
+    {"setpin", cmd_setpin}, /* 设置引脚 -i inst -d dev_id -s sel -p pin */
     {NULL, NULL}
 };
 
@@ -523,7 +552,6 @@ static const papp_ops_t sspi_app_ops = {
     .close = sspi_app_close,
     .write = sspi_app_write,
     .read  = sspi_app_read,
-    .ioctl = sspi_app_ioctl,
     .cmd   = sspi_app_cmd,
 };
 

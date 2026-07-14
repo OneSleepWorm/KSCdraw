@@ -39,11 +39,6 @@
  *   inst | 0x80        读 overflow 计数 (count>0 自动清零)
  *
  * ============================================================
- * appioctl — 格式化输出 (到默认实例)
- * ============================================================
- *   appioctl(u, "val=%d\r\n", 42);
- *
- * ============================================================
  * 回调 — RX 数据到达通知
  * ============================================================
  *   app->callback = on_rx;
@@ -67,7 +62,6 @@
 #include "../inc/KSCOSsystem.h"
 #if __USE_STM32__
 #include "stm32f1xx.h"
-#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -283,24 +277,6 @@ static int uart_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     return (int)read;
 }
 
-static int uart_app_ioctl(app_t* app, const char* fmt, va_list ap)
-{
-    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-
-    uint8_t inst = ctx->dflt_inst;
-    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
-
-    char buf[128];
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    if (n > 0) {
-        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        USART_TypeDef* uart = uart_reg(inst);
-        uart_tx_raw(uart, (const uint8_t*)buf, len);
-    }
-    return n;
-}
-
 static int cmd_open(app_t* app, const char** argv)
 {
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
@@ -410,7 +386,6 @@ static const papp_ops_t uart_serial_ops = {
     .close = uart_app_close,
     .write = uart_app_write,
     .read  = uart_app_read,
-    .ioctl = uart_app_ioctl,
     .cmd   = uart_app_cmd,
 };
 

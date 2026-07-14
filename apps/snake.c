@@ -389,10 +389,12 @@ static int snake_init(app_t* app, int mode)
 
     /* GUI */
     if (appopen(ctx->obj) < 0) return -1;
-    appioctl(ctx->obj, "init");
+    appcmd(ctx->obj, "init");
     sysdelay(10);
-    ctx->tile_h = (uint8_t)appioctl(ctx->obj, "wcreate", 0, 0, 240, 320, 0x0000);
-    appioctl(ctx->obj, "wselect", (int)ctx->tile_h);
+    appcmd(ctx->obj, "wcreate -x 0 -y 0 -w 240 -h 320 -c 0000");
+    ctx->tile_h = (uint8_t)(uintptr_t)ctx->obj->callback_data;
+    ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
+    appcmd(ctx->obj, "wselect");
 
     /* button16 */
     if (appopen(ctx->kpd) < 0) { appclose(ctx->obj); return -1; }
@@ -449,11 +451,22 @@ static int snake_ioctl(app_t* app, const char* fmt, va_list ap)
     return 0;
 }
 
+static int snake_cmd(app_t* app, const char* cmdname, const char** argv)
+{
+    snake_ctx_t* ctx = (snake_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    if (strcmp(cmdname, "init") == 0) {
+        int mode = APPCMD_HAS(argv, 'm') ? (int)strtoul(argv[APPCMD_ARG('m')], NULL, 0) : 2;
+        return snake_init(app, mode);
+    }
+    return -1;
+}
+
 static const papp_ops_t snake_ops = {
     .open   = snake_open,
     .close  = snake_close,
     .read   = snake_read,
-    .ioctl  = snake_ioctl,
+    .cmd    = snake_cmd,
 };
 
 /* dep: none (tim_clock managed internally), app_dep: KSCGUI(app0), button16(app1) */

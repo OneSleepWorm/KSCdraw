@@ -5,6 +5,7 @@
 #if __USE_STM32__
 #include "stm32f1xx.h"
 #include "app.h"
+#include <stdio.h>
 
 app_t* ksc_console = NULL;
 volatile uint32_t sys_tick_ms = 0;
@@ -79,6 +80,20 @@ int __io_putchar(int ch)
         appwrite(ksc_console, &c, 1, 0x01);
     }
     return ch;
+}
+
+void kscprintf(const char* fmt, ...)
+{
+    if (!ksc_console) return;
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[128];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+        appwrite(ksc_console, buf, len, 0x11);
+    }
 }
 
 void KSCOSSystemClock_Init(unsigned char clock_type)
