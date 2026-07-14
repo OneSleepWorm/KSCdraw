@@ -68,6 +68,8 @@
 #if __USE_STM32__
 #include "stm32f1xx.h"
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 /* gpio_port mode constants (CRL/CRH nibble encoding) */
 #define UART_TX_MODE  0x0B  /* push-pull output 50MHz */
@@ -87,6 +89,7 @@ typedef struct {
     uint16_t         brr[3];        /* per-instance BRR value */
     uart_rx_ring_t*  ring[3];
     app_t*           owner[3];      /* ISR 反向查找 app_t */
+    uint32_t         rd_val;
 } uart_ctx_t;
 
 static app_t* uart_owners[4];
@@ -170,12 +173,14 @@ static int uart_app_open(app_t* app)
     if (!ctx) return -1;
     ctx->enabled    = 0;
     ctx->dflt_inst  = 1;
+    ctx->rd_val     = 0;
     for (int i = 0; i < 3; i++) {
         ctx->brr[i] = uart_brr_compute((uint8_t)(i + 1), UART_BAUD_DEFAULT);
         ctx->ring[i] = NULL;
         ctx->owner[i] = NULL;
     }
     app->app_data = ctx;
+    app->callback_data = &ctx->rd_val;
     return 0;
 }
 
@@ -194,6 +199,7 @@ static int uart_app_close(app_t* app)
     }
     osfree(ctx);
     app->app_data = NULL;
+    app->callback_data = NULL;
     return 0;
 }
 
@@ -295,12 +301,117 @@ static int uart_app_ioctl(app_t* app, const char* fmt, va_list ap)
     return n;
 }
 
+static int cmd_open(app_t* app, const char** argv)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 3) return -1;
+    inst_init(app, (uint8_t)inst);
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    return 1;
+}
+
+static int cmd_close(app_t* app, const char** argv)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 3) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    USART_TypeDef* uart = uart_reg((uint8_t)inst);
+    if (uart) uart->CR1 &= ~(USART_CR1_UE | USART_CR1_RXNEIE);
+    NVIC_DisableIRQ(irq_map[inst - 1]);
+    uart_owners[inst] = NULL;
+    ctx->enabled &= ~(1 << (inst - 1));
+    if (ctx->ring[inst - 1]) { osfree(ctx->ring[inst - 1]); ctx->ring[inst - 1] = NULL; }
+    return 1;
+}
+
+static int cmd_baud(app_t* app, const char** argv)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i') || !APPCMD_HAS(argv, 'b')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    uint32_t baud = strtoul(argv[APPCMD_ARG('b')], NULL, 0);
+    if (inst < 1 || inst > 3 || baud < 1200) return -1;
+    ctx->brr[inst - 1] = uart_brr_compute((uint8_t)inst, baud);
+    if (ctx->enabled & (1 << (inst - 1))) {
+        USART_TypeDef* uart = uart_reg((uint8_t)inst);
+        uart->BRR = ctx->brr[inst - 1];
+    }
+    return 1;
+}
+
+static int cmd_rxirq(app_t* app, const char** argv)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 3) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    USART_TypeDef* uart = uart_reg((uint8_t)inst);
+    uint32_t en = APPCMD_HAS(argv, 'e') ? strtoul(argv[APPCMD_ARG('e')], NULL, 0) : 1;
+    if (en)
+        uart->CR1 |= USART_CR1_RXNEIE;
+    else
+        uart->CR1 &= ~USART_CR1_RXNEIE;
+    return 1;
+}
+
+static int cmd_dflt(app_t* app, const char** argv)
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 3) return -1;
+    ctx->dflt_inst = (uint8_t)inst;
+    return 1;
+}
+
+static int cmd_baudrd(app_t* app, const char** argv)  /* rd */
+{
+    uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
+    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 3) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    uint32_t pclk = (inst == 1) ? SystemCoreClock : (SystemCoreClock / 2);
+    uint32_t baud = pclk / ctx->brr[inst - 1];
+    if (app->callback_data) *(uint32_t*)app->callback_data = baud;
+    return 1;
+}
+
+typedef int (*uart_cmd_h)(app_t*, const char**);
+typedef struct { const char* name; uart_cmd_h handler; } uart_cmd_t;
+
+static const uart_cmd_t uart_cmds[] = {
+    {"open",  cmd_open},
+    {"close", cmd_close},
+    {"baud",  cmd_baud},
+    {"rxirq", cmd_rxirq},
+    {"dflt",  cmd_dflt},
+    {"rd",    cmd_baudrd},
+    {NULL, NULL}
+};
+
+static int uart_app_cmd(app_t* app, const char* cmd, const char** argv)
+{
+    if (!app) return -1;
+    for (const uart_cmd_t* e = uart_cmds; e->name; e++) {
+        if (strcmp(cmd, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t uart_serial_ops = {
     .open  = uart_app_open,
     .close = uart_app_close,
     .write = uart_app_write,
     .read  = uart_app_read,
     .ioctl = uart_app_ioctl,
+    .cmd   = uart_app_cmd,
 };
 
 REGISTER_APP_EX("uart_serial", "0", "1\0gpio_port", &uart_serial_ops,

@@ -48,7 +48,18 @@
  *   5  — Unique ID. data[0..7]=8 字节 UID.
  *   0  — no-op.
  *
- * 典型用法:
+ * appcmd 接口 (字符串命令):
+ *   flash->user_data = buf;
+ *   appcmd(flash, "id")                         → 返回 JEDEC ID
+ *   appcmd(flash, "sr")                         → 返回 Status Reg 1
+ *   appcmd(flash, "uid")                        → 8 B UID → buf
+ *   appcmd(flash, "read  -a 0 -n 256")          → 读 n B → buf
+ *   appcmd(flash, "fast  -a 0 -n 256")          → 快速读
+ *   appcmd(flash, "write -a 1000 -n 16")        → 从 buf 写 n B
+ *   appcmd(flash, "erase -a 0 -s 4096")         → 4K 扇区擦除
+ *   appcmd(flash, "ce")                         → 全片擦除
+ *
+ * 传统 appwrite/appread 接口不变:
  *
  *   app_t* flash = appget("w25qxx_base");
  *   appopen(flash);
@@ -80,6 +91,7 @@
 #include "../inc/app.h"
 #include "../inc/super_spi.h"
 #include "../inc/KSCOSsystem.h"
+#include <string.h>
 #if __USE_STM32__
 
 #define CS_PIN  11
@@ -313,11 +325,170 @@ static int w25_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     }
 }
 
+/* ================================================================
+ * appcmd 接口
+ * ================================================================
+ *
+ *   数据通过 app->user_data 传递（读: 调用方设缓冲 → handler 写入;
+ *   写: 调用方设数据指针 → handler 读出）。
+ *
+ *   id                               返回 JEDEC ID (如 0xEF4017)
+ *   sr                               返回 Status Register 1
+ *   uid                              读 8 字节 UID → user_data
+ *   read -a <addr> -n <len>          标准读 (0x03), 结果 → user_data
+ *   fast -a <addr> -n <len>          快速读 (0x0B + 1 dummy)
+ *   write -a <addr> -n <len>         页写 (0x02, ≤256 B), 数据从 user_data 取
+ *   erase -a <addr> -s <size>        擦除: -s 4096/32768/65536
+ *   ce                               全片擦除
+ */
+
+typedef struct { const char* name; int (*handler)(app_t*, const char**); } w25_cmd_t;
+
+static int cmd_id(app_t* app, const char** argv)
+{
+    (void)argv;
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    uint8_t id[3], c = 0x9F;
+    w25_cs_low(ctx);
+    w25_xfer(ctx, &c, 1, id, 3);
+    w25_cs_high(ctx);
+    return (id[0] << 16) | (id[1] << 8) | id[2];
+}
+
+static int cmd_sr(app_t* app, const char** argv)
+{
+    (void)argv;
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    uint8_t sr, c = 0x05;
+    w25_cs_low(ctx);
+    w25_xfer(ctx, &c, 1, &sr, 1);
+    w25_cs_high(ctx);
+    return sr;
+}
+
+static int cmd_uid(app_t* app, const char** argv)
+{
+    (void)argv;
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx || !app->user_data) return -1;
+    uint8_t hdr[5] = {0x4B, 0xFF, 0xFF, 0xFF, 0xFF};
+    w25_cs_low(ctx);
+    w25_xfer(ctx, hdr, 5, (uint8_t*)app->user_data, 8);
+    w25_cs_high(ctx);
+    return 8;
+}
+
+static int cmd_read(app_t* app, const char** argv)
+{
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
+    uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
+    if (n == 0 || !app->user_data) return -1;
+    uint8_t cmd[4] = {0x03, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF};
+    w25_cs_low(ctx);
+    w25_xfer(ctx, cmd, 4, (uint8_t*)app->user_data, n);
+    w25_cs_high(ctx);
+    return (int)n;
+}
+
+static int cmd_fast(app_t* app, const char** argv)
+{
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
+    uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
+    if (n == 0 || !app->user_data) return -1;
+    uint8_t cmd[5] = {0x0B, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF, 0xFF};
+    w25_cs_low(ctx);
+    w25_xfer(ctx, cmd, 5, (uint8_t*)app->user_data, n);
+    w25_cs_high(ctx);
+    return (int)n;
+}
+
+static int cmd_write(app_t* app, const char** argv)
+{
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
+    uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
+    if (n == 0 || n > 256 || !app->user_data) return -1;
+    uint8_t* src = (uint8_t*)app->user_data;
+    w25_wait_ready(ctx);
+    w25_we(ctx);
+    uint8_t hdr[4] = {0x02, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF};
+    w25_cs_low(ctx);
+    w25_xfer(ctx, hdr, 4, NULL, 0);
+    w25_xfer(ctx, src, n, NULL, 0);
+    w25_cs_high(ctx);
+    w25_wait_ready(ctx);
+    return (int)n;
+}
+
+static int cmd_erase(app_t* app, const char** argv)
+{
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 's')) return -1;
+    uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    uint32_t size = strtoul(argv[APPCMD_ARG('s')], NULL, 0);
+    uint8_t op;
+    if (size == 4096) op = 0x20;
+    else if (size == 32768) op = 0x52;
+    else if (size == 65536) op = 0xD8;
+    else return -1;
+    w25_wait_ready(ctx);
+    w25_we(ctx);
+    uint8_t c[4] = {op, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF};
+    w25_cs_low(ctx);
+    w25_xfer(ctx, c, 4, NULL, 0);
+    w25_cs_high(ctx);
+    w25_wait_ready(ctx);
+    return 0;
+}
+
+static int cmd_ce(app_t* app, const char** argv)
+{
+    (void)argv;
+    w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    w25_wait_ready(ctx);
+    w25_we(ctx);
+    uint8_t c = 0xC7;
+    w25_cs_low(ctx);
+    w25_xfer(ctx, &c, 1, NULL, 0);
+    w25_cs_high(ctx);
+    w25_wait_ready(ctx);
+    return 0;
+}
+
+static int w25_cmd(app_t* app, const char* cmdname, const char** argv)
+{
+    static const w25_cmd_t table[] = {
+        {"id",    cmd_id},
+        {"sr",    cmd_sr},
+        {"uid",   cmd_uid},
+        {"read",  cmd_read},
+        {"fast",  cmd_fast},
+        {"write", cmd_write},
+        {"erase", cmd_erase},
+        {"ce",    cmd_ce},
+        {NULL, NULL}
+    };
+    for (const w25_cmd_t* e = table; e->name; e++) {
+        if (strcmp(cmdname, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t w25_app_ops = {
     .open  = w25_app_open,
     .close = w25_app_close,
     .write = w25_app_write,
     .read  = w25_app_read,
+    .cmd   = w25_cmd,
 };
 
 REGISTER_APP_EX("w25qxx_base", "0", "1\0super_spi", &w25_app_ops, "W25Q64 SPI NOR Flash");

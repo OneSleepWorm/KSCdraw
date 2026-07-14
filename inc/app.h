@@ -17,6 +17,10 @@ typedef int (*papp_close_func)(struct app_t* app);
 typedef int (*papp_read_func)(struct app_t* app, void* data, uint32_t count, uint32_t mode);
 typedef int (*papp_write_func)(struct app_t* app, void* data, uint32_t count, uint32_t mode);
 typedef int (*papp_ioctl_func)(struct app_t* app, const char* fmt, va_list ap);
+typedef int (*papp_cmd_func)(struct app_t* app, const char* cmdname, const char** argv);
+
+#define APPCMD_ARG(c)   ((c) - 'a')
+#define APPCMD_HAS(argv, c)  ((argv)[APPCMD_ARG(c)] != NULL)
 
 typedef struct papp_ops_t {
     papp_open_func  open;
@@ -24,6 +28,7 @@ typedef struct papp_ops_t {
     papp_read_func  read;
     papp_write_func write;
     papp_ioctl_func ioctl;
+    papp_cmd_func   cmd;
 } papp_ops_t;
 
 typedef struct __attribute__((aligned(16))) papp_t {
@@ -43,6 +48,8 @@ typedef struct app_t {
     void_func_t         callback;
     void*               app_data;
     void*               user_data;
+    void*               callback_data;
+    void*               mode_data;
 } app_t;
 
 #define _APP_CONCAT2(a, b) a##b
@@ -66,5 +73,6 @@ int    appclose(app_t* app);
 int    appread(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appwrite(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appioctl(app_t* app, const char* fmt, ...);
+int    appcmd(app_t* app, const char* cmdline);
 
 #endif

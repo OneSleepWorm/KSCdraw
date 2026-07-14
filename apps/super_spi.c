@@ -92,6 +92,7 @@
 #include "../inc/app.h"
 #include "../inc/super_spi.h"
 #include "../inc/KSCOSsystem.h"
+#include "app_config.h"
 #include <string.h>
 #if __USE_STM32__
 #include "stm32f1xx.h"
@@ -110,6 +111,7 @@ typedef struct {
     uint32_t      gpio_base;
     uint8_t       dma_ch;
     uint8_t       inited;
+    uint8_t       br;
 } sspi_inst_t;
 
 typedef struct {
@@ -170,6 +172,8 @@ static void dma_send(SPI_TypeDef* spi, uint8_t ch,
 
     spi->CR2 &= ~SPI_CR2_TXDMAEN;
     dch->CCR &= ~DMA_CCR_EN;
+    (void)spi->DR;
+    (void)spi->SR;
 }
 
 static void lazy_init_spi(uint8_t idx, sspi_ctx_t* ctx)
@@ -179,16 +183,17 @@ static void lazy_init_spi(uint8_t idx, sspi_ctx_t* ctx)
 
     SPI_TypeDef* spi = ctx->inst[idx].spi;
 
+    uint8_t br = ctx->inst[idx].br & 7;
     if (idx == 0) {
         GPIOA->CRL = (GPIOA->CRL & ~(0xF << 20)) | (0xB << 20);
         GPIOA->CRL = (GPIOA->CRL & ~(0xF << 24)) | (0x4 << 24);
         GPIOA->CRL = (GPIOA->CRL & ~(0xF << 28)) | (0xB << 28);
-        spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSI | SPI_CR1_SSM | SPI_CR1_BR_0;
+        spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSI | SPI_CR1_SSM | (br << 3);
     } else {
         GPIOB->CRH = (GPIOB->CRH & ~(0xF << 20)) | (0xB << 20);
         GPIOB->CRH = (GPIOB->CRH & ~(0xF << 24)) | (0x4 << 24);
         GPIOB->CRH = (GPIOB->CRH & ~(0xF << 28)) | (0xB << 28);
-        spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSI | SPI_CR1_SSM;
+        spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSI | SPI_CR1_SSM | (br << 3);
     }
     spi->CR1 |= SPI_CR1_SPE;
 }
@@ -221,10 +226,12 @@ static int sspi_app_open(app_t* app)
     ctx->inst[0].spi       = SPI1;
     ctx->inst[0].gpio_base = 0;
     ctx->inst[0].dma_ch    = 3;
+    ctx->inst[0].br        = 1;
 
     ctx->inst[1].spi       = SPI2;
     ctx->inst[1].gpio_base = 16;
     ctx->inst[1].dma_ch    = 5;
+    ctx->inst[1].br        = 1;
 
     app->app_data = ctx;
 
@@ -421,12 +428,103 @@ static int sspi_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     return 0;
 }
 
+/* ================================================================
+ * appcmd handlers — 通过 appcmd(sspi, "init -i 2") 调用
+ *
+ * 参数规则:
+ *   -i <inst> : SPI 实例 (1=SPI1, 2=SPI2)
+ *   -b <0..7> : SPI 波特率分频 (init 用, BR[2:0], 默认 1)
+ *   -n <count> : 收发字节数 (tx 用)
+ *   -m         : 使用 mode_data.len 作为字节数 (tx 用)
+ *
+ * 典型用法:
+ *   appcmd(sspi, "init -i 2");             // 初始化 SPI2 (默认 BR=1, 分频/4)
+ *   appcmd(sspi, "init -i 2 -b 0");        // 初始化 SPI2, BR=0 (分频/2, 18MHz)
+ *   appcmd(sspi, "tx -i 2 -n 1");          // SPI2 收发 1 字节
+ *   sspi->user_data = buf;
+ *   appcmd(sspi, "tx -i 2 -m");            // 使用 mode_data 长度
+ *
+ * 注意: tx 的发送数据来自 app->user_data, 接收数据存 app->callback_data
+ * ================================================================ */
+
+/* init: 初始化 SPI 实例 — -i inst */
+static int cmd_init(app_t* app, const char** argv)
+{
+    sspi_ctx_t* ctx = (sspi_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    int inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 2) return -1;
+    uint8_t idx = (uint8_t)(inst - 1);
+    if (APPCMD_HAS(argv, 'b')) {
+        int b = strtoul(argv[APPCMD_ARG('b')], NULL, 0);
+        if (b < 0 || b > 7) return -1;
+        ctx->inst[idx].br = (uint8_t)b;
+    }
+    lazy_init_spi(idx, ctx);
+    return 1;
+}
+
+static int cmd_tx(app_t* app, const char** argv)
+{
+    sspi_ctx_t* ctx = (sspi_ctx_t*)app->app_data;
+    if (!ctx || !APPCMD_HAS(argv, 'i')) return -1;
+    if (!APPCMD_HAS(argv, 'n') && !(APPCMD_HAS(argv, 'm') && app->mode_data)) return -1;
+    int inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 2) return -1;
+
+    int n;
+    if (APPCMD_HAS(argv, 'n')) {
+        n = strtoul(argv[APPCMD_ARG('n')], NULL, 0);
+        if (n < 1 || n > 65535) return -1;
+    } else {
+        n = ((sspi_mode_t*)app->mode_data)->len;
+        if (n < 1 || n > 65535) return -1;
+    }
+
+    uint8_t idx = (uint8_t)(inst - 1);
+    lazy_init_spi(idx, ctx);
+    SPI_TypeDef* spi = ctx->inst[idx].spi;
+
+    uint8_t* txb = (uint8_t*)app->user_data;
+    uint8_t* rxb = (uint8_t*)app->callback_data;
+
+    for (int i = 0; i < n; i++) {
+        spi_wait_txe(spi);
+        spi->DR = txb ? txb[i] : 0xFF;
+        while (!(spi->SR & SPI_SR_RXNE)) {}
+        uint8_t r = spi->DR;
+        if (rxb) rxb[i] = r;
+    }
+    spi_wait_bsy(spi);
+    return n;
+}
+
+/* appcmd dispatch table — 命令名 → handler */
+typedef struct { const char* name; int (*handler)(app_t*, const char**); } sspi_cmd_t;
+
+static const sspi_cmd_t sspi_cmds[] = {
+    {"init", cmd_init}, /* 初始化 SPI 实例 -i inst [-b br] */
+    {"tx",   cmd_tx},   /* SPI 全双工收发  -i inst -n <count> | -m */
+    {NULL, NULL}
+};
+
+static int sspi_app_cmd(app_t* app, const char* cmd, const char** argv)
+{
+    if (!app) return -1;
+    for (const sspi_cmd_t* e = sspi_cmds; e->name; e++) {
+        if (strcmp(cmd, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t sspi_app_ops = {
     .open  = sspi_app_open,
     .close = sspi_app_close,
     .write = sspi_app_write,
     .read  = sspi_app_read,
     .ioctl = sspi_app_ioctl,
+    .cmd   = sspi_app_cmd,
 };
 
 REGISTER_APP_EX("super_spi", "0", "1\0gpio_port",

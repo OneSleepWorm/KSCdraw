@@ -63,12 +63,22 @@ void sys_init(void)
 
     pll_init();
 
-    ksc_console = appget("uart_serial");
-    if (ksc_console) {
-        ksc_console->user_data = (void*)1;
-        appopen(ksc_console);
-        appwrite(ksc_console, NULL, 0, 0x14);
+    app_t* uart = appget("uart_serial");
+    if (uart) {
+        appopen(uart);
+        appcmd(uart, "open -i 1");
     }
+
+    ksc_console = uart;
+}
+
+int __io_putchar(int ch)
+{
+    if (ksc_console && ksc_console->app_data) {
+        char c = (char)ch;
+        appwrite(ksc_console, &c, 1, 0x01);
+    }
+    return ch;
 }
 
 void KSCOSSystemClock_Init(unsigned char clock_type)
@@ -92,9 +102,9 @@ void sys_init(void)
 void KSCOSSystemClock_Init(uint8_t clock_type) { (void)clock_type; }
 #endif
 
-void* osmalloc(size_t size) { return malloc(size); }
-void osfree(void* ptr) { free(ptr); }
-void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
+void* osmalloc(size_t size) { kscprintf("osmalloc: %d\r\n", size); return malloc(size); }
+void osfree(void* ptr) { kscprintf("osfree: %p\r\n", ptr); free(ptr); }
+void* oscalloc(size_t num, size_t size) { kscprintf("oscalloc: %d, %d\r\n", num, size); return calloc(num, size); }
 
 #if __USE_STM32__
 void KSCOS_Error_Handler(void)

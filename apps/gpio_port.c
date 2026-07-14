@@ -63,6 +63,8 @@
 
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
+#include <stdlib.h>
+#include <string.h>
 #if __USE_STM32__
 #include "stm32f1xx.h"
 
@@ -71,6 +73,7 @@
 
 typedef struct {
     uint8_t enabled_ports;  /* bit0=A bit1=B bit2=C bit3=D */
+    uint32_t rd_val;
 } gpio_ctx_t;
 
 static GPIO_TypeDef* port_reg(uint8_t port)
@@ -101,7 +104,9 @@ static int gpio_app_open(app_t* app)
     gpio_ctx_t* ctx = (gpio_ctx_t*)osmalloc(sizeof(gpio_ctx_t));
     if (!ctx) return -1;
     ctx->enabled_ports = 0;
+    ctx->rd_val = 0;
     app->app_data = ctx;
+    app->callback_data = &ctx->rd_val;
     return 0;
 }
 
@@ -109,6 +114,7 @@ static int gpio_app_close(app_t* app)
 {
     if (app->app_data) osfree(app->app_data);
     app->app_data = NULL;
+    app->callback_data = NULL;
     return 0;
 }
 
@@ -253,11 +259,115 @@ static int gpio_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     }
 }
 
+/* ================================================================
+ * appcmd handlers — 通过 appcmd(gpio, "cfg -p N -m M") 调用
+ *
+ * 参数规则:
+ *   -p <pin>    : 全局引脚号 (0-15=A, 16-31=B, 32-47=C)
+ *   -v <0/1>    : 电平值 (set 用)
+ *   -m <nibble> : CR 配置 nibble (cfg 用, 默认 0)
+ *
+ * 典型用法:
+ *   appcmd(gpio, "cfg -p 4 -m 3");      // PA4 推挽输出 50MHz
+ *   appcmd(gpio, "set -p 4 -v 1");      // PA4 = HIGH
+ *   appcmd(gpio, "tog -p 4");            // PA4 翻转
+ *   appcmd(gpio, "rd -p 4");            // 读 PA4 → callback_data
+ * ================================================================ */
+
+static int cmd_cfg(app_t* app, const char** argv)
+{
+    gpio_ctx_t* ctx = (gpio_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'p')) return -1;
+    uint32_t pin = strtoul(argv[APPCMD_ARG('p')], NULL, 0);
+    uint32_t nib = APPCMD_HAS(argv, 'm') ? strtoul(argv[APPCMD_ARG('m')], NULL, 0) : 0;
+    uint8_t port = PORT_OF(pin);
+    uint8_t local = PIN_OF(pin);
+    GPIO_TypeDef* gpio = port_reg(port);
+    if (!gpio) return -1;
+    rcc_lazy(ctx, port);
+    volatile uint32_t* cr = (local < 8) ? &gpio->CRL : &gpio->CRH;
+    uint32_t shift = (local & 7) * 4;
+    *cr = (*cr & ~(0xF << shift)) | ((nib & 0xF) << shift);
+    return 1;
+}
+
+/* set: 置/复位引脚 — -p pin -v 0/1 (默认 1=HIGH) */
+static int cmd_set(app_t* app, const char** argv)
+{
+    gpio_ctx_t* ctx = (gpio_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'p')) return -1;
+    uint32_t pin = strtoul(argv[APPCMD_ARG('p')], NULL, 0);
+    uint32_t val = APPCMD_HAS(argv, 'v') ? strtoul(argv[APPCMD_ARG('v')], NULL, 0) : 1;
+    uint8_t port = PORT_OF(pin);
+    uint8_t local = PIN_OF(pin);
+    GPIO_TypeDef* gpio = port_reg(port);
+    if (!gpio) return -1;
+    rcc_lazy(ctx, port);
+    gpio->BSRR = val ? (1 << local) : (1 << (local + 16));
+    (void)gpio->IDR;
+    return 1;
+}
+
+/* tog: 翻转引脚 — -p pin */
+static int cmd_tog(app_t* app, const char** argv)
+{
+    gpio_ctx_t* ctx = (gpio_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'p')) return -1;
+    uint32_t pin = strtoul(argv[APPCMD_ARG('p')], NULL, 0);
+    uint8_t port = PORT_OF(pin);
+    uint8_t local = PIN_OF(pin);
+    GPIO_TypeDef* gpio = port_reg(port);
+    if (!gpio) return -1;
+    rcc_lazy(ctx, port);
+    uint32_t bit = gpio->IDR & (1 << local);
+    gpio->BSRR = bit ? (1 << (local + 16)) : (1 << local);
+    return 1;
+}
+
+/* rd: 读引脚电平 — -p pin, 结果存 callback_data */
+static int cmd_rd(app_t* app, const char** argv)
+{
+    gpio_ctx_t* ctx = (gpio_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'p')) return -1;
+    uint32_t pin = strtoul(argv[APPCMD_ARG('p')], NULL, 0);
+    uint8_t port = PORT_OF(pin);
+    uint8_t local = PIN_OF(pin);
+    GPIO_TypeDef* gpio = port_reg(port);
+    if (!gpio) return -1;
+    rcc_lazy(ctx, port);
+    if (app->callback_data)
+        *(uint32_t*)app->callback_data = (gpio->IDR >> local) & 1;
+    return 1;
+}
+
+/* appcmd dispatch table — 命令名 → handler */
+typedef int (*gpio_cmd_h)(app_t*, const char**);
+typedef struct { const char* name; gpio_cmd_h handler; } gpio_cmd_t;
+
+static const gpio_cmd_t gpio_cmds[] = {
+    {"cfg", cmd_cfg},   /* 配置引脚模式  -p pin -m nibble */
+    {"set", cmd_set},   /* 置/复位引脚  -p pin -v 0/1 */
+    {"tog", cmd_tog},   /* 翻转引脚     -p pin */
+    {"rd",  cmd_rd},    /* 读引脚电平   -p pin → callback_data */
+    {NULL, NULL}
+};
+
+static int gpio_app_cmd(app_t* app, const char* cmd, const char** argv)
+{
+    if (!app) return -1;
+    for (const gpio_cmd_t* e = gpio_cmds; e->name; e++) {
+        if (strcmp(cmd, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t gpio_app_ops = {
     .open  = gpio_app_open,
     .close = gpio_app_close,
     .write = gpio_app_write,
     .read  = gpio_app_read,
+    .cmd   = gpio_app_cmd,
 };
 
 REGISTER_APP("gpio_port", "0", &gpio_app_ops,

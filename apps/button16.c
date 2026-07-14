@@ -122,6 +122,7 @@
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
 #include <string.h>
+#include <stdlib.h>
 #if __USE_STM32__
 
 #define KEY_PRESS     0
@@ -166,6 +167,7 @@ typedef struct {
     uint8_t  _pad;
     uint32_t latest_keys;
     btn16_cpx_t* cpx;
+    uint32_t rd_val;
 } btn16_data_t;
 
 static void ev_push(btn16_cpx_t* c, uint32_t ev)
@@ -240,12 +242,11 @@ static void* scan_cb(void* data)
                 c->down_ticks[i]++;
                 if (c->down_ticks[i] >= c->hold_ticks) {
                     c->states[i] = STATE_HOLD;
+                    ev_push(c, EV_PACK(i, KEY_HOLD));
                 }
             }
 
             if (c->states[i] == STATE_HOLD) {
-                if ((c->down_ticks[i] - c->hold_ticks) % c->hold_gap == 0)
-                    ev_push(c, EV_PACK(i, KEY_HOLD));
                 c->down_ticks[i]++;
                 if (c->down_ticks[i] >= LONG_TICKS && !(c->flags[i] & 1)) {
                     c->flags[i] |= 1;
@@ -281,6 +282,7 @@ static int btn16_open(app_t* app)
         d->cpx->hold_gap   = HOLD_GAP_DEF;
     }
     app->app_data = d;
+    app->callback_data = &d->rd_val;
     return 0;
 }
 
@@ -293,6 +295,7 @@ static int btn16_close(app_t* app)
     }
     if (d->cpx) osfree(d->cpx);
     if (app->app_data) osfree(app->app_data);
+    app->callback_data = NULL;
     return 0;
 }
 
@@ -372,11 +375,140 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     return 0;
 }
 
+static int cmd_init(app_t* app, const char** argv)
+{
+    (void)argv;
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d || d->hw_inited) return -1;
+    if (app->app0) appopen(app->app0);
+    for (int p = 0; p < 8; p++) {
+        uint32_t nib = (p < 4) ? 0x3 : 0x8;
+        appwrite(app->app0, NULL, (p << 4) | nib, 1);
+    }
+    uint32_t zero = 0;
+    appwrite(app->app0, &zero, 0x00FF, 3);
+    uint32_t raw = keypad_scan(app->app0);
+    d->latest_keys = raw;
+    if (d->cpx) d->cpx->prev_raw = raw;
+    d->hw_inited = 1;
+    return 1;
+}
+
+static int cmd_scan(app_t* app, const char** argv)
+{
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d || !APPCMD_HAS(argv, 't')) return -1;
+    uint32_t ms = strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (ms < 10) return -1;
+    app_t* tim = appget("tim_clock");
+    d->interval_ms = ms;
+    tim->callback = scan_cb;
+    tim->user_data = app;
+    appopen(tim);
+    appwrite(tim, NULL, d->interval_ms, 0x31);
+    appwrite(tim, NULL, 1, 0x32);
+    d->timer_started = 1;
+    return 1;
+}
+
+static int cmd_stop(app_t* app, const char** argv)
+{
+    (void)argv;
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d) return -1;
+    if (d->timer_started) {
+        app_t* tim = appget("tim_clock");
+        appwrite(tim, NULL, 0, 0x32);
+        d->timer_started = 0;
+    }
+    return 1;
+}
+
+static int cmd_cpx(app_t* app, const char** argv)
+{
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d || !APPCMD_HAS(argv, 'e')) return -1;
+    uint32_t en = strtoul(argv[APPCMD_ARG('e')], NULL, 0);
+    if (en && !d->complex_mode) {
+        d->cpx = osmalloc(sizeof(btn16_cpx_t));
+        if (d->cpx) {
+            memset(d->cpx, 0, sizeof(btn16_cpx_t));
+            d->complex_mode = 1;
+            uint32_t raw = keypad_scan(app->app0);
+            d->latest_keys = raw;
+            d->cpx->prev_raw = raw;
+        }
+    } else if (!en && d->complex_mode) {
+        osfree(d->cpx);
+        d->cpx = NULL;
+        d->complex_mode = 0;
+    }
+    return 1;
+}
+
+static int cmd_hold(app_t* app, const char** argv)
+{
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d || !APPCMD_HAS(argv, 't')) return -1;
+    if (!d->complex_mode || !d->cpx) return -1;
+    d->cpx->hold_ticks = (uint8_t)strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (APPCMD_HAS(argv, 'g'))
+        d->cpx->hold_gap = (uint8_t)strtoul(argv[APPCMD_ARG('g')], NULL, 0);
+    return 1;
+}
+
+static int cmd_rd(app_t* app, const char** argv)
+{
+    btn16_data_t* d = (btn16_data_t*)app->app_data;
+    if (!app || !d) return -1;
+    if (APPCMD_HAS(argv, 'k')) {
+        if (app->callback_data)
+            *(uint32_t*)app->callback_data = d->latest_keys;
+        return 1;
+    }
+    if (APPCMD_HAS(argv, 'i')) {
+        if (app->callback_data)
+            *(uint32_t*)app->callback_data = d->interval_ms;
+        return 1;
+    }
+    if (APPCMD_HAS(argv, 'e') && d->complex_mode && d->cpx) {
+        uint32_t ev = ev_pop(d->cpx);
+        if (app->callback_data)
+            *(uint32_t*)app->callback_data = ev;
+        return ev ? 1 : 0;
+    }
+    return -1;
+}
+
+typedef int (*btn_cmd_h)(app_t*, const char**);
+typedef struct { const char* name; btn_cmd_h handler; } btn_cmd_t;
+
+static const btn_cmd_t btn_cmds[] = {
+    {"init",  cmd_init},
+    {"scan",  cmd_scan},
+    {"stop",  cmd_stop},
+    {"cpx",   cmd_cpx},
+    {"hold",  cmd_hold},
+    {"rd",    cmd_rd},
+    {NULL, NULL}
+};
+
+static int btn16_app_cmd(app_t* app, const char* cmd, const char** argv)
+{
+    if (!app) return -1;
+    for (const btn_cmd_t* e = btn_cmds; e->name; e++) {
+        if (strcmp(cmd, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t btn16_ops = {
     .open  = btn16_open,
     .close = btn16_close,
     .read  = btn16_read,
     .write = btn16_write,
+    .cmd   = btn16_app_cmd,
 };
 
 REGISTER_APP_EX("button16", "0", "1\0gpio_port",

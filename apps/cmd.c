@@ -16,7 +16,7 @@ typedef struct cmd_ctx {
     uint8_t    pos;
     app_t*     uart;
     app_t*     gui;
-    uint8_t    prompt_ready;
+    app_t*     term;
     app_t*     fs;
     lfs_file_t file;
     uint8_t*   rw_buf;
@@ -32,7 +32,11 @@ typedef struct {
 
 static void cmd_puts(cmd_ctx_t* ctx, const char* s)
 {
-    appwrite(ctx->uart, (void*)s, strlen(s), 0x11);
+    size_t len = strlen(s);
+    if (ctx->term && ctx->term->app_data)
+        appwrite(ctx->term, (void*)s, len, 0x01);
+    else
+        appwrite(ctx->uart, (void*)s, len, 0x11);
 }
 
 static void cmd_putc(cmd_ctx_t* ctx, char c)
@@ -505,33 +509,42 @@ static void process_line(cmd_ctx_t* ctx, char* line)
     cmd_puts(ctx, "'\r\n");
 }
 
-static int cmd_poll(cmd_ctx_t* ctx)
+static void cmd_process_char(cmd_ctx_t* ctx, uint8_t ch, int echo)
 {
-    if (!ctx->prompt_ready) {
+    if (ch == '\r' || ch == '\n') {
+        if (ctx->pos == 0) return;
+        ctx->line[ctx->pos] = '\0';
+        cmd_puts(ctx, "\r\n");
+        process_line(ctx, ctx->line);
         cmd_puts(ctx, "# ");
-        ctx->prompt_ready = 1;
-    }
-
-    uint8_t buf[16];
-    int n = appread(ctx->uart, buf, sizeof(buf), 0x01);
-    for (int i = 0; i < n; i++) {
-        uint8_t ch = buf[i];
-        if (ch == '\r' || ch == '\n') {
-            if (ctx->pos == 0) continue;
-            ctx->line[ctx->pos] = '\0';
-            cmd_puts(ctx, "\r\n");
-            process_line(ctx, ctx->line);
-            cmd_puts(ctx, "# ");
-            ctx->pos = 0;
-        } else if (ch == '\b' || ch == 127) {
-            if (ctx->pos > 0) {
-                ctx->pos--;
-                cmd_puts(ctx, "\b \b");
-            }
-        } else if (ctx->pos < CMD_LINE_BUF_SIZE - 1) {
-            ctx->line[ctx->pos++] = (char)ch;
+        ctx->pos = 0;
+    } else if (ch == '\b' || ch == 127) {
+        if (ctx->pos > 0) {
+            ctx->pos--;
+            if (echo) cmd_puts(ctx, "\b \b");
+        }
+    } else if (ctx->pos < CMD_LINE_BUF_SIZE - 1) {
+        ctx->line[ctx->pos++] = (char)ch;
+        if (echo) {
+            char ec[2] = {(char)ch, '\0'};
+            cmd_puts(ctx, ec);
         }
     }
+}
+
+static int cmd_poll(cmd_ctx_t* ctx)
+{
+    uint8_t buf[16];
+    int n = appread(ctx->uart, buf, sizeof(buf), 0x01);
+    for (int i = 0; i < n; i++)
+        cmd_process_char(ctx, buf[i], 1);
+    return 1;
+}
+
+static int cmd_exec(cmd_ctx_t* ctx, const char* line)
+{
+    process_line(ctx, (char*)line);
+    cmd_puts(ctx, "# ");
     return 1;
 }
 
@@ -548,6 +561,8 @@ static int cmd_open(app_t* app)
     ctx->gui = appget("KSCGUI");
     if (ctx->gui) appopen(ctx->gui);
 
+    ctx->term = appget("term");
+
     ctx->fs = appget("littlefs");
     if (ctx->fs) appopen(ctx->fs);
 
@@ -555,6 +570,7 @@ static int cmd_open(app_t* app)
     ctx->cwd[1] = '\0';
 
     app->app_data = ctx;
+    cmd_puts(ctx, "# ");
     return 0;
 }
 
@@ -576,6 +592,10 @@ static int cmd_ioctl(app_t* app, const char* fmt, va_list ap)
     cmd_ctx_t* ctx = (cmd_ctx_t*)app->app_data;
     if (!ctx) return -1;
     if (strcmp(fmt, "poll") == 0) return cmd_poll(ctx);
+    if (strcmp(fmt, "exec") == 0) {
+        const char* line = va_arg(ap, const char*);
+        return cmd_exec(ctx, line);
+    }
     return 0;
 }
 

@@ -30,6 +30,8 @@
 
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
+#include <string.h>
+#include <stdlib.h>
 #if __USE_STM32__
 #include "stm32f1xx.h"
 
@@ -37,6 +39,7 @@ typedef struct {
     void_func_t cb[4];
     void*       ud[4];
     uint8_t     enabled;
+    uint32_t    rd_val;
 } tim_ctx_t;
 
 static app_t* tim_owners[4];
@@ -101,7 +104,9 @@ static int tim_app_open(app_t* app)
         ctx->ud[i] = NULL;
     }
     ctx->enabled = 0;
+    ctx->rd_val = 0;
     app->app_data = ctx;
+    app->callback_data = &ctx->rd_val;
     return 0;
 }
 
@@ -122,6 +127,7 @@ static int tim_app_close(app_t* app)
     }
     osfree(ctx);
     app->app_data = NULL;
+    app->callback_data = NULL;
     return 0;
 }
 
@@ -185,11 +191,103 @@ static int tim_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     return 4;
 }
 
+static int cmd_regcb(app_t* app, const char** argv)
+{
+    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 4) return -1;
+    inst_init(app, ctx, (uint8_t)inst);
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    return 1;
+}
+
+static int cmd_period(app_t* app, const char** argv)
+{
+    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'i') || !APPCMD_HAS(argv, 't')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    uint32_t ms   = strtoul(argv[APPCMD_ARG('t')], NULL, 0);
+    if (inst < 1 || inst > 4) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    TIM_TypeDef* tim = tim_reg((uint8_t)inst);
+    uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
+    uint32_t arr = 10 * ms - 1;
+    tim->PSC = (uint16_t)psc;
+    tim->ARR = (uint16_t)arr;
+    tim->EGR |= TIM_EGR_UG;
+    return 1;
+}
+
+static int cmd_start(app_t* app, const char** argv)
+{
+    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 4) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    TIM_TypeDef* tim = tim_reg((uint8_t)inst);
+    tim->CNT = 0;
+    tim->SR = ~TIM_SR_UIF;
+    tim->DIER |= TIM_DIER_UIE;
+    tim->CR1 |= TIM_CR1_CEN;
+    return 1;
+}
+
+static int cmd_stop(app_t* app, const char** argv)
+{
+    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 4) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    TIM_TypeDef* tim = tim_reg((uint8_t)inst);
+    tim->CR1 &= ~TIM_CR1_CEN;
+    tim->DIER &= ~TIM_DIER_UIE;
+    return 1;
+}
+
+static int cmd_timrd(app_t* app, const char** argv)
+{
+    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
+    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
+    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
+    if (inst < 1 || inst > 4) return -1;
+    if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
+    TIM_TypeDef* tim = tim_reg((uint8_t)inst);
+    if (app->callback_data)
+        *(uint32_t*)app->callback_data = (tim->ARR + 1) / 10;
+    return 1;
+}
+
+typedef int (*tim_cmd_h)(app_t*, const char**);
+typedef struct { const char* name; tim_cmd_h handler; } tim_cmd_t;
+
+static const tim_cmd_t tim_cmds[] = {
+    {"regcb",  cmd_regcb},
+    {"period", cmd_period},
+    {"start",  cmd_start},
+    {"stop",   cmd_stop},
+    {"rd",     cmd_timrd},
+    {NULL, NULL}
+};
+
+static int tim_app_cmd(app_t* app, const char* cmd, const char** argv)
+{
+    if (!app) return -1;
+    for (const tim_cmd_t* e = tim_cmds; e->name; e++) {
+        if (strcmp(cmd, e->name) == 0)
+            return e->handler(app, argv);
+    }
+    return -1;
+}
+
 static const papp_ops_t tim_clock_ops = {
     .open  = tim_app_open,
     .close = tim_app_close,
     .write = tim_app_write,
     .read  = tim_app_read,
+    .cmd   = tim_app_cmd,
 };
 
 REGISTER_APP("tim_clock", "0", &tim_clock_ops,

@@ -86,6 +86,8 @@ app_t* appget(const char* name)
         app->callback    = CALLBACK_NULL_FUNC;
         app->app_data    = NULL;
         app->user_data   = NULL;
+        app->callback_data = NULL;
+        app->mode_data   = NULL;
 
         if (papp->app_dep_str) {
             app_t* appslots[4] = {NULL, NULL, NULL, NULL};
@@ -162,6 +164,52 @@ int appioctl(app_t* app, const char* fmt, ...)
     int ret = app->app_ops->ioctl(app, fmt, ap);
     va_end(ap);
     return ret;
+}
+
+#define APPCMD_LINE_MAX  128
+
+int appcmd(app_t* app, const char* cmdline)
+{
+    if (!app || !app->app_ops || !app->app_ops->cmd) return -1;
+
+    static char buf[APPCMD_LINE_MAX];
+    static const char* argv[26];
+
+    for (int i = 0; i < 26; i++) argv[i] = NULL;
+
+    strncpy(buf, cmdline, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char* p = buf;
+    while (*p == ' ') p++;
+    if (!*p) return -1;
+    char* cmdname = p;
+    while (*p && *p != ' ') p++;
+    if (*p) *p++ = '\0';
+
+    while (*p) {
+        while (*p == ' ') *p++ = '\0';
+        if (!*p) break;
+        if (*p == '-' && p[1] >= 'a' && p[1] <= 'z') {
+            int idx = p[1] - 'a';
+            p += 2;
+            while (*p == ' ') p++;
+            if (!*p) {
+                argv[idx] = "";
+                break;
+            }
+            if (!(*p == '-' && (p[1] >= 'a' && p[1] <= 'z'))) {
+                argv[idx] = p;
+                while (*p && *p != ' ') p++;
+            } else {
+                argv[idx] = "";
+            }
+        } else {
+            break;
+        }
+    }
+
+    return app->app_ops->cmd(app, cmdname, argv);
 }
 
 void appfree(app_t* app)
