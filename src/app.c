@@ -1,7 +1,10 @@
 #include "../inc/app.h"
-#include "../inc/dd.h"
 #include "../inc/KSCOSsystem.h"
 #include <string.h>
+
+#ifndef CALLBACK_NULL_FUNC
+#define CALLBACK_NULL_FUNC ((void_func_t)0)
+#endif
 
 /* ================================================================
  * 应用缓存 — 单例 + 引用计数
@@ -154,16 +157,6 @@ int appwrite(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     if (!app || !app->app_ops || !app->app_ops->write) return -1;
     return app->app_ops->write(app, data, count, mode);
-}
-
-int appioctl(app_t* app, const char* fmt, ...)
-{
-    if (!app || !app->app_ops || !app->app_ops->ioctl) return -1;
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = app->app_ops->ioctl(app, fmt, ap);
-    va_end(ap);
-    return ret;
 }
 
 #define APPCMD_LINE_MAX  128

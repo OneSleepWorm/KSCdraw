@@ -1,6 +1,12 @@
+/**
+ * @file    ctrl_list.c
+ * @note    方向键列表控件 (依赖 list + button16 + tim_clock)
+ * @flash   ~696B (Debug, -Og)
+ */
+
 #include "../inc/app.h"
-#include "../inc/ctrl_list.h"
 #include "../inc/KSCOSsystem.h"
+#include "app_config.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -96,91 +102,6 @@ static int ctrl_close(app_t* app)
     }
     osfree(ctx);
     app->app_data = NULL;
-    return 0;
-}
-
-/* ── handlers ── */
-
-static int handler_init(ctrl_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    if (ctx->hw_opened) return -1;
-
-    if (appopen(ctx->kpd) < 0) return -1;
-    appwrite(ctx->kpd, NULL, 0, 1);
-    { uint32_t iv = ctx->interval_ms; appwrite(ctx->kpd, &iv, 1, 2); }
-    { uint32_t enable = 1; appwrite(ctx->kpd, &enable, 1, 4); }
-    { uint32_t p[2] = {HOLD_TICKS, HOLD_GAP}; appwrite(ctx->kpd, p, 2, 5); }
-
-    if (appopen(ctx->list) < 0) { appclose(ctx->kpd); return -1; }
-
-    ctx->tim->callback  = tick_cb;
-    ctx->tim->user_data = ctx->app;
-    appopen(ctx->tim);
-    appwrite(ctx->tim, NULL, ctx->interval_ms, 0x41);
-    appwrite(ctx->tim, NULL, 1,              0x42);
-
-    ctx->hw_opened = 1;
-    return 1;
-}
-
-static int handler_setmap(ctrl_ctx_t* ctx, va_list ap)
-{
-    const ctrl_keymap_t* km = va_arg(ap, const ctrl_keymap_t*);
-    ctx->km = *km;
-    return 1;
-}
-
-static int handler_setinterval(ctrl_ctx_t* ctx, va_list ap)
-{
-    int ms = va_arg(ap, int);
-    if (ms < 10) ms = 10;
-    ctx->interval_ms = (uint16_t)ms;
-    if (ctx->hw_opened)
-        appwrite(ctx->tim, NULL, ctx->interval_ms, 0x41);
-    return 1;
-}
-
-static int handler_setcb(ctrl_ctx_t* ctx, va_list ap)
-{
-    ctx->callback  = va_arg(ap, ctrl_event_cb_t);
-    ctx->user_data = va_arg(ap, void*);
-    return 1;
-}
-
-static int handler_getlist(ctrl_ctx_t* ctx, va_list ap)
-{
-    app_t** out = va_arg(ap, app_t**);
-    *out = ctx->list;
-    return 1;
-}
-
-/* ── ioctl dispatch ── */
-
-typedef int (*ctrl_handler_t)(ctrl_ctx_t*, va_list);
-
-typedef struct {
-    const char*    name;
-    ctrl_handler_t handler;
-} ctrl_cmd_t;
-
-static const ctrl_cmd_t cmd_table[] = {
-    {"init",        handler_init},
-    {"setmap",      handler_setmap},
-    {"setinterval", handler_setinterval},
-    {"setcb",       handler_setcb},
-    {"getlist",     handler_getlist},
-};
-
-static int ctrl_ioctl(app_t* app, const char* fmt, va_list ap)
-{
-    ctrl_ctx_t* ctx = (ctrl_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-
-    for (size_t i = 0; i < sizeof(cmd_table) / sizeof(cmd_table[0]); i++) {
-        if (strcmp(fmt, cmd_table[i].name) == 0)
-            return cmd_table[i].handler(ctx, ap);
-    }
     return 0;
 }
 

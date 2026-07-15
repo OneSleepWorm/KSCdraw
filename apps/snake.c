@@ -1,6 +1,7 @@
 /**
  * @file    snake.c
  * @note    Snake Game — 纯中断驱动, 全对象增量渲染
+ * @flash   ~1892B (Debug, -Og)
  *
  * ============================================================
  * 基本信息
@@ -18,7 +19,7 @@
  * 用户代码:
  *   app_t* g = appget("snake");
  *   appopen(g);
- *   appioctl(g, "init", 1);   // 1=阻塞模式, 2=中断模式
+ *   appcmd(g, "init -m 1");   // 1=阻塞模式, 2=中断模式
  *   appclose(g);
  *
  * ============================================================
@@ -46,8 +47,8 @@
  */
 
 #include "../inc/app.h"
-#include "../inc/kscgui.h"
 #include "../inc/KSCOSsystem.h"
+#include "app_config.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -276,11 +277,11 @@ static void show_initial(snake_ctx_t* ctx)
 {
     /* pass 1: 全量擦除 + 画静态元素 (墙/分数) */
     render_full_reset(ctx);
-    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
+    appwrite(ctx->obj, ctx->objs, OBJ_TOTAL, 0x02);
 
     /* pass 2: 画蛇/食物 (首帧, 无擦除器) */
     render(ctx, 0, 1);
-    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
+    appwrite(ctx->obj, ctx->objs, OBJ_TOTAL, 0x02);
 }
 
 /* ── TIM4 中断回调 ── */
@@ -309,7 +310,9 @@ static void* tick_cb(void* data)
         if (ctx->game_over) {
             init_game(ctx);
             init_objects(ctx);
-            GUI_SETOBJPOOL(ctx->obj, ctx->tile_h, ctx->objs, OBJ_TOTAL);
+            ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
+            ctx->obj->user_data = ctx->objs;
+            { char _b[32]; snprintf(_b, sizeof(_b), "setobjpool -n %d", OBJ_TOTAL); appcmd(ctx->obj, _b); }
             show_initial(ctx);
             return NULL;
         }
@@ -320,9 +323,9 @@ static void* tick_cb(void* data)
             if (!ctx->paused) {
                 /* 取消暂停: 全量擦除后重绘 (PAUSED 文字不再残留) */
                 render_full_reset(ctx);
-                GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
+                appwrite(ctx->obj, ctx->objs, OBJ_TOTAL, 0x02);
                 render(ctx, 0, 1);
-                GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
+                appwrite(ctx->obj, ctx->objs, OBJ_TOTAL, 0x02);
                 return NULL;
             }
             continue;
@@ -349,7 +352,7 @@ static void* tick_cb(void* data)
         render(ctx, 0, 0);
     }
 
-    GUI_DRAWOBJS(ctx->obj, ctx->objs, OBJ_TOTAL);
+    appwrite(ctx->obj, ctx->objs, OBJ_TOTAL, 0x02);
     return NULL;
 }
 
@@ -404,7 +407,9 @@ static int snake_init(app_t* app, int mode)
     /* 游戏初始化 + 首次绘制 */
     init_game(ctx);
     init_objects(ctx);
-    GUI_SETOBJPOOL(ctx->obj, ctx->tile_h, ctx->objs, OBJ_TOTAL);
+    ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
+    ctx->obj->user_data = ctx->objs;
+    { char _b[32]; snprintf(_b, sizeof(_b), "setobjpool -n %d", OBJ_TOTAL); appcmd(ctx->obj, _b); }
     show_initial(ctx);
 
     /* TIM4: mode=0x41 设周期, mode=0x42 count=1 启动 */
@@ -436,17 +441,6 @@ static int snake_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     if (mode == 1 && data) {
         *(uint32_t*)data = ctx->running ? 1 : 0;
         return 4;
-    }
-    return 0;
-}
-
-static int snake_ioctl(app_t* app, const char* fmt, va_list ap)
-{
-    snake_ctx_t* ctx = (snake_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-    if (strcmp(fmt, "init") == 0) {
-        int mode = va_arg(ap, int);
-        return snake_init(app, mode);
     }
     return 0;
 }

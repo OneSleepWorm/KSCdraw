@@ -1,6 +1,7 @@
 /**
  * @file    littlefs_fs.c
  * @note    littlefs 文件系统集成 (W25Q64 SPI NOR Flash)
+ * @flash   ~2918B (Debug, -Og)
  *
  * ============================================================
  * 基本信息
@@ -102,8 +103,8 @@
 
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
-#include "../inc/littlefs_fs.h"
 #include "lfs.h"
+#include "app_config.h"
 #include <stdio.h>
 #include <string.h>
 #if __USE_STM32__
@@ -222,6 +223,45 @@ static int lfs_app_close(app_t* app)
     app->app_data = NULL;
     return 0;
 }
+
+/* file/io operation descriptors (formerly in littlefs_fs.h) */
+typedef struct {
+    lfs_file_t* file;
+    const char* path;
+    int         flags;
+} lfs_file_op_t;
+
+typedef struct {
+    lfs_file_t* file;
+    void*       buffer;
+    lfs_size_t  size;
+} lfs_rw_t;
+
+typedef struct {
+    lfs_file_t* file;
+    lfs_soff_t  offset;
+    int         whence;
+} lfs_seek_t;
+
+typedef struct {
+    const char*      oldpath;
+    const char*      newpath;
+} lfs_rename_t;
+
+typedef struct {
+    const char*       path;
+    struct lfs_info* info;
+} lfs_stat_t;
+
+typedef struct {
+    lfs_dir_t*  dir;
+    const char* path;
+} lfs_dir_op_t;
+
+typedef struct {
+    lfs_dir_t*      dir;
+    struct lfs_info* info;
+} lfs_dir_read_t;
 
 static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {

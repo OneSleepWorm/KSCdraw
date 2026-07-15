@@ -1,6 +1,7 @@
 /**
  * @file    list.c
  * @note    GUI List Widget — 字符串池 + 碎片管理 + 多选中样式 + 回调
+ * @flash   ~3132B (Debug, -Og)
  *
  * ============================================================
  * 基本信息
@@ -21,36 +22,36 @@
  * 外部接口
  * ============================================================
  *
- * 全部数据操作走 appioctl，无 appwrite:
+ * 全部通过 appcmd 接口:
  *
  *   appget("list") -> app_t*
  *   appopen(list)  -> 分配 context, 设默认值
  *   appclose(list) -> 释放
  *
  *   --- 数据操作 ---
- *   appioctl(list, "add", "label")      -> 追加一项
- *   appioctl(list, "remove", idx)       -> 删除一项
- *   appioctl(list, "clear")             -> 清空
- *   appioctl(list, "compact")           -> 手动碎片整理
+ *   appcmd(list, "add -d label")           -> 追加一项
+ *   appcmd(list, "remove -i idx")          -> 删除一项
+ *   appcmd(list, "clear")                  -> 清空
+ *   appcmd(list, "compact")                -> 手动碎片整理
  *
  *   --- 选中 ---
- *   appioctl(list, "select", idx)       -> 选中指定项
- *   appioctl(list, "move", delta)       -> [+1/-1] 移动选中
- *   appioctl(list, "confirm")           -> 触发 callback
+ *   appcmd(list, "select -i idx")          -> 选中指定项
+ *   appcmd(list, "move -d delta")          -> [+1/-1] 移动选中
+ *   appcmd(list, "confirm")                -> 触发 callback
  *   选中变化时自动调用 app->callback(app->user_data)
  *
  *   --- 查询 ---
- *   appioctl(list, "getcount")          -> int 总项数
- *   appioctl(list, "getlabel", idx, &p) -> const char* 零拷贝指针
- *   appread(list, &sel, 0, 1)          -> 读 selected
- *   appread(list, buf, idx, 2)         -> 拷贝标签
+ *   appcmd(list, "getcount")               -> int 返回值
+ *   appcmd(list, "getlabel -i idx")        -> const char* 零拷贝指针
+ *   appread(list, &sel, 0, 1)             -> 读 selected
+ *   appread(list, buf, idx, 2)            -> 拷贝标签
  *
  *   --- 外观 ---
- *   appioctl(list, "setpos", &pos)      -> list_pos_t 结构体
- *   appioctl(list, "setcolors", &c)     -> list_colors_t 结构体
- *   appioctl(list, "setstyle", s)       -> 选中样式 (0-4)
- *   appioctl(list, "init")              -> 创建 KSCGUI 窗口 + 首绘
- *   appioctl(list, "refresh")           -> 全量重绘
+ *   appcmd(list, "setpos") [user_data]     -> list_pos_t 结构体
+ *   appcmd(list, "setcolors") [user_data]  -> list_colors_t 结构体
+ *   appcmd(list, "setstyle -s <0-4>")     -> 选中样式 (0-4)
+ *   appcmd(list, "init")                   -> 创建 KSCGUI 窗口 + 首绘
+ *   appcmd(list, "refresh")                -> 全量重绘
  *
  * ============================================================
  * 选中样式 (list.h)
@@ -65,8 +66,8 @@
  * 渲染策略
  * ============================================================
  * 全量渲染 (list_render):
- *   1. GUI_FILL 清空可视区域 (防字符串残留)
- *   2. GUI_DRAWOBJS 画所有文字
+ *   1. appcmd fill 清空可视区域 (防字符串残留)
+ *   2. appwrite 0x02 画所有文字
  *   3. 根据 sel_style 画选中行高亮
  *
  * 增量渲染 (highlight_row):
@@ -90,18 +91,18 @@
  *   list->user_data = my_ctx;
  *   appopen(list);
  *
- *   appioctl(list, "add", "System");
- *   appioctl(list, "add", "Settings");
- *   appioctl(list, "add", "Media");
+ *   appcmd(list, "add -d System");
+ *   appcmd(list, "add -d Settings");
+ *   appcmd(list, "add -d Media");
  *
  *   list_pos_t pos = {0, 0, 240, 320, 24};
  *   list_colors_t col = {0x001F, 0x0000, 0xFFFF, 0xF800};
- *   appioctl(list, "setpos", &pos);
- *   appioctl(list, "setcolors", &col);
- *   appioctl(list, "setstyle", LIST_STYLE_FILLROW);
- *   appioctl(list, "init");
+ *   list->user_data = &pos; appcmd(list, "setpos");
+ *   list->user_data = &col; appcmd(list, "setcolors");
+ *   appcmd(list, "setstyle -s 1");
+ *   appcmd(list, "init");
  *
- *   appioctl(list, "move", 1);
+ *   appcmd(list, "move -d 1");
  *   uint32_t sel;
  *   appread(list, &sel, 0, 1);
  *
@@ -111,12 +112,12 @@
  */
 
 #include "../inc/app.h"
-#include "../inc/kscgui.h"
 #include "../inc/KSCOSsystem.h"
 #include "../inc/KSCfont.h"
-#include "../inc/list.h"
+#include "app_config.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #if __USE_STM32__
 
@@ -330,8 +331,8 @@ static void list_render(list_ctx_t* ctx)
 {
     if (ctx->visible == 0 || !ctx->gui) return;
 
-    GUI_FILL(ctx->gui, 0, 0, ctx->w, ctx->visible * ctx->item_h, ctx->bg);
-    GUI_DRAWOBJS(ctx->gui, ctx->objs, LIST_MAX_VISIBLE);
+    { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y 0 -w %d -h %d -c %04X", ctx->w, ctx->visible * ctx->item_h, (unsigned)ctx->bg); appcmd(ctx->gui, _b); }
+    appwrite(ctx->gui, ctx->objs, LIST_MAX_VISIBLE, 0x02);
 
     uint8_t sel_i = ctx->selected - ctx->scroll_ofs;
     if (sel_i >= ctx->visible) return;
@@ -341,19 +342,19 @@ static void list_render(list_ctx_t* ctx)
 
     switch (ctx->sel_style) {
     case LIST_STYLE_FILLROW:
-        GUI_FILL(ctx->gui, 0, sy, ctx->w, ctx->item_h, ctx->sel_bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y %d -w %d -h %d -c %04X", sy, ctx->w, ctx->item_h, (unsigned)ctx->sel_bg); appcmd(ctx->gui, _b); }
         ctx->objs[sel_i].colorck = ctx->sel_fg;
-        GUI_DRAWOBJ(ctx->gui, &ctx->objs[sel_i]);
+        appwrite(ctx->gui, &ctx->objs[sel_i], 1, 0x01);
         break;
     case LIST_STYLE_FILLBAR:
-        GUI_FILL(ctx->gui, 0, sy, 4, ctx->item_h, ctx->sel_bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y %d -w 4 -h %d -c %04X", sy, ctx->item_h, (unsigned)ctx->sel_bg); appcmd(ctx->gui, _b); }
         break;
     case LIST_STYLE_ARROW:
-        GUI_CHAR(ctx->gui, 2, ty, '>', ctx->sel_fg, ctx->bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "char -x 2 -y %d -v 62 -c %04X -b %04X", ty, (unsigned)ctx->sel_fg, (unsigned)ctx->bg); appcmd(ctx->gui, _b); }
         break;
     case LIST_STYLE_TEXTONLY:
         ctx->objs[sel_i].colorck = ctx->sel_fg;
-        GUI_DRAWOBJ(ctx->gui, &ctx->objs[sel_i]);
+        appwrite(ctx->gui, &ctx->objs[sel_i], 1, 0x01);
         break;
     default:
         break;
@@ -371,21 +372,20 @@ static void highlight_row(list_ctx_t* ctx, uint8_t item, KSCCOLOR bg)
 
     switch (ctx->sel_style) {
     case LIST_STYLE_FILLROW:
-        GUI_FILL(ctx->gui, 0, sy, ctx->w, ctx->item_h, bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y %d -w %d -h %d -c %04X", sy, ctx->w, ctx->item_h, (unsigned)bg); appcmd(ctx->gui, _b); }
         ctx->objs[i].colorck = is_sel ? ctx->sel_fg : ctx->fg;
-        GUI_DRAWOBJ(ctx->gui, &ctx->objs[i]);
+        appwrite(ctx->gui, &ctx->objs[i], 1, 0x01);
         break;
     case LIST_STYLE_FILLBAR:
-        GUI_FILL(ctx->gui, 0, sy, 4, ctx->item_h, bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y %d -w 4 -h %d -c %04X", sy, ctx->item_h, (unsigned)bg); appcmd(ctx->gui, _b); }
         break;
     case LIST_STYLE_ARROW:
-        GUI_CHAR(ctx->gui, 2, ty, '>',
-                 is_sel ? ctx->sel_fg : ctx->bg, ctx->bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "char -x 2 -y %d -v 62 -c %04X -b %04X", ty, (unsigned)(is_sel ? ctx->sel_fg : ctx->bg), (unsigned)ctx->bg); appcmd(ctx->gui, _b); }
         break;
     case LIST_STYLE_TEXTONLY:
-        GUI_FILL(ctx->gui, 0, sy, ctx->w, ctx->item_h, ctx->bg);
+        { char _b[72]; snprintf(_b, sizeof(_b), "fill -x 0 -y %d -w %d -h %d -c %04X", sy, ctx->w, ctx->item_h, (unsigned)ctx->bg); appcmd(ctx->gui, _b); }
         ctx->objs[i].colorck = is_sel ? ctx->sel_fg : ctx->fg;
-        GUI_DRAWOBJ(ctx->gui, &ctx->objs[i]);
+        appwrite(ctx->gui, &ctx->objs[i], 1, 0x01);
         break;
     default:
         break;
@@ -469,165 +469,6 @@ static int list_close(app_t* app)
     osfree(ctx);
     app->app_data = NULL;
     return 0;
-}
-
-/* ── Handler ── */
-
-static int handler_init(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    if (ctx->hw_opened) return -1;
-    if (appopen(ctx->gui) < 0) return -1;
-
-    appcmd(ctx->gui, "init");
-    sysdelay(10);
-    { char _b[80]; snprintf(_b, sizeof(_b), "wcreate -x %d -y %d -w %d -h %d -c %04X",
-        ctx->x, ctx->y, ctx->w, ctx->h, ctx->bg);
-      appcmd(ctx->gui, _b);
-      ctx->tile = (tile_h_t)(uintptr_t)ctx->gui->callback_data; }
-    ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
-    appcmd(ctx->gui, "wselect");
-    ctx->hw_opened = 1;
-
-    obj_sync(ctx);
-    list_render(ctx);
-    return 1;
-}
-
-static int handler_add(list_ctx_t* ctx, va_list ap)
-{
-    const char* s = va_arg(ap, const char*);
-    int r = pool_add(ctx, s);
-    if (ctx->hw_opened && r > 0) {
-        obj_sync(ctx);
-        list_render(ctx);
-    }
-    return r;
-}
-
-static int handler_remove(list_ctx_t* ctx, va_list ap)
-{
-    int idx = va_arg(ap, int);
-    if (idx < 0 || idx >= ctx->count) return -1;
-    pool_remove(ctx, (uint8_t)idx);
-    if (ctx->hw_opened && ctx->count > 0) {
-        obj_sync(ctx);
-        list_render(ctx);
-    }
-    return 1;
-}
-
-static int handler_clear(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    ctx->count      = 0;
-    ctx->selected   = 0;
-    ctx->scroll_ofs = 0;
-    ctx->data_used  = 0;
-    ctx->frag_count = 0;
-    obj_sync(ctx);
-    if (ctx->hw_opened) list_render(ctx);
-    return 1;
-}
-
-static int handler_compact(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    frag_compact(ctx);
-    if (ctx->hw_opened) {
-        obj_sync(ctx);
-        list_render(ctx);
-    }
-    return 1;
-}
-
-static int handler_select(list_ctx_t* ctx, va_list ap)
-{
-    int idx = va_arg(ap, int);
-    return do_select(ctx, (uint8_t)idx);
-}
-
-static int handler_confirm(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    if (ctx->app && ctx->app->callback)
-        ctx->app->callback(ctx->app->user_data);
-    return 1;
-}
-
-static int handler_move(list_ctx_t* ctx, va_list ap)
-{
-    int delta = va_arg(ap, int);
-    return do_move(ctx, delta);
-}
-
-static int handler_getcount(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    return (int)ctx->count;
-}
-
-static int handler_getlabel(list_ctx_t* ctx, va_list ap)
-{
-    int idx = va_arg(ap, int);
-    const char** out = va_arg(ap, const char**);
-    if (idx < 0 || idx >= ctx->count) return -1;
-    *out = ctx->data_buf + ctx->offsets[idx];
-    return 1;
-}
-
-static int handler_setpos(list_ctx_t* ctx, va_list ap)
-{
-    const list_pos_t* p = va_arg(ap, const list_pos_t*);
-    ctx->x = p->x; ctx->y = p->y;
-    ctx->w = p->w; ctx->h = p->h;
-    ctx->item_h = p->item_h ? p->item_h : (uint8_t)(Systemfont0.height + 4);
-    if (ctx->hw_opened) {
-        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
-        { char _b[64]; snprintf(_b, sizeof(_b), "wmove -x %d -y %d", ctx->x, ctx->y);
-          appcmd(ctx->gui, _b); }
-        { char _b[64]; snprintf(_b, sizeof(_b), "wresize -w %d -h %d", ctx->w, ctx->h);
-          appcmd(ctx->gui, _b); }
-    }
-    return 1;
-}
-
-static int handler_setcolors(list_ctx_t* ctx, va_list ap)
-{
-    const list_colors_t* c = va_arg(ap, const list_colors_t*);
-    ctx->sel_bg = c->sel_bg;
-    ctx->bg     = c->bg;
-    ctx->fg     = c->fg;
-    ctx->sel_fg = c->sel_fg;
-    if (ctx->hw_opened) {
-        ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
-        { char _b[48]; snprintf(_b, sizeof(_b), "wbk -c %04X", ctx->bg);
-          appcmd(ctx->gui, _b); }
-        obj_sync(ctx);
-        list_render(ctx);
-    }
-    return 1;
-}
-
-static int handler_refresh(list_ctx_t* ctx, va_list ap)
-{
-    (void)ap;
-    obj_sync(ctx);
-    list_render(ctx);
-    return 1;
-}
-
-static int handler_setstyle(list_ctx_t* ctx, va_list ap)
-{
-    int style = va_arg(ap, int);
-    if (style < LIST_STYLE_NONE || style > LIST_STYLE_ARROW)
-        return -1;
-    ctx->sel_style = (uint8_t)style;
-    if (ctx->hw_opened) {
-        obj_sync(ctx);
-        list_render(ctx);
-    }
-    return 1;
 }
 
 /* ── appcmd handlers ── */
@@ -823,47 +664,6 @@ static int list_cmd(app_t* app, const char* cmdname, const char** argv)
             return cmd_table_new[i].handler(app, ctx, argv);
     }
     return -1;
-}
-
-/* ── 命令表 ── */
-
-typedef int (*list_handler_t)(list_ctx_t*, va_list);
-
-typedef struct {
-    const char*    name;
-    list_handler_t handler;
-} list_cmd_t;
-
-static const list_cmd_t cmd_table[] = {
-    {"init",      handler_init},
-    {"add",       handler_add},
-    {"remove",    handler_remove},
-    {"clear",     handler_clear},
-    {"compact",   handler_compact},
-    {"select",    handler_select},
-    {"confirm",   handler_confirm},
-    {"move",      handler_move},
-    {"getcount",  handler_getcount},
-    {"getlabel",  handler_getlabel},
-    {"setpos",    handler_setpos},
-    {"setcolors", handler_setcolors},
-    {"setstyle",  handler_setstyle},
-    {"refresh",   handler_refresh},
-};
-
-/* ── ioctl ── */
-
-static int list_ioctl(app_t* app, const char* fmt, va_list ap)
-{
-    list_ctx_t* ctx = (list_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-
-    for (size_t i = 0; i < sizeof(cmd_table) / sizeof(cmd_table[0]); i++) {
-        if (strcmp(fmt, cmd_table[i].name) == 0)
-            return cmd_table[i].handler(ctx, ap);
-    }
-
-    return 0;
 }
 
 /* ── read ── */

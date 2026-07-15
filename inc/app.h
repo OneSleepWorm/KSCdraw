@@ -2,7 +2,6 @@
 #define __APP_H__
 
 #include <stdint.h>
-#include <stdarg.h>
 
 typedef void* (*void_func_t)(void*);
 
@@ -16,7 +15,6 @@ typedef int (*papp_open_func)(struct app_t* app);
 typedef int (*papp_close_func)(struct app_t* app);
 typedef int (*papp_read_func)(struct app_t* app, void* data, uint32_t count, uint32_t mode);
 typedef int (*papp_write_func)(struct app_t* app, void* data, uint32_t count, uint32_t mode);
-typedef int (*papp_ioctl_func)(struct app_t* app, const char* fmt, va_list ap);
 typedef int (*papp_cmd_func)(struct app_t* app, const char* cmdname, const char** argv);
 
 #define APPCMD_ARG(c)   ((c) - 'a')
@@ -27,7 +25,6 @@ typedef struct papp_ops_t {
     papp_close_func close;
     papp_read_func  read;
     papp_write_func write;
-    papp_ioctl_func ioctl;
     papp_cmd_func   cmd;
 } papp_ops_t;
 
@@ -72,7 +69,6 @@ int    appopen(app_t* app);
 int    appclose(app_t* app);
 int    appread(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appwrite(app_t* app, void* data, uint32_t count, uint32_t mode);
-int    appioctl(app_t* app, const char* fmt, ...);
 int    appcmd(app_t* app, const char* cmdline);
 
 #endif

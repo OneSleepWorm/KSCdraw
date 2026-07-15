@@ -1,6 +1,7 @@
 /**
  * @file    kscgui.c
  * @note    GUI 管理器 — Tile 合成器 + ST7789 驱动
+ * @flash   ~6724B (Debug, -Og) / 文本+只读数据
  *
  * ============================================================
  * 使用说明 — appcmd 接口（推荐方式）
@@ -127,7 +128,7 @@
  *     mode 0x01 → DRAWOBJ  (单 ksc_obj_t)
  *     mode 0x02 → DRAWOBJS (ksc_obj_t 数组)
  *
- *   低频（配置/管理）：appioctl，经 strcmp 查表
+ *   低频（配置/管理）：appcmd，经 strcmp 查表
  *     tile 生命周期: wcreate/wdelete/wselect/whide/…
  *     绘图命令: clear/fill/pixel/line/rect/string/…
  *     obj 池: setobjpool/getobjpool
@@ -151,21 +152,18 @@
  * 外部 API:
  *   appget("KSCGUI") → app_t*
  *   appopen(gui)
- *   appioctl(gui, "wcreate", x,y,w,h,bk)   → tile_h_t as int
- *   appioctl(gui, "wdelete", handle)
- *   appioctl(gui, "wselect", handle)
+ *   appcmd(gui, "wcreate -x 0 -y 0 -w 240 -h 320 -c 0000") → tile_h_t
+ *   appcmd(gui, "wdelete")
+ *   appcmd(gui, "wselect")
  *   完整宏定义见 kscgui.h
  *   appclose(gui)
  */
 
 #include "../inc/app.h"
-#include "../inc/kscgui.h"
-#include "../inc/super_spi.h"
 #include "../inc/KSCdraw.h"
 #include "../inc/KSCOSsystem.h"
 #include "app_config.h"
 #include <string.h>
-#include <stdarg.h>
 
 #if __USE_STM32__
 
@@ -184,9 +182,6 @@
 /* Tile flags */
 #define TILE_F_USED     0x01
 #define TILE_F_VISIBLE  0x02
-
-/* Command descriptor flags */
-#define CMD_NEEDS_TILE  0x01
 
 /* ================================================================
  * Types
@@ -211,14 +206,6 @@ typedef struct {
     uint8_t         active_slot;    /* cache of active tile's slot index */
     uint8_t         pixbuf[512];
 } gui_ctx_t;
-
-typedef int (*cmd_handler_t)(gui_ctx_t*, KSC_window*, va_list);
-
-typedef struct {
-    const char*     name;
-    cmd_handler_t   handler;
-    uint8_t         flags;          /* CMD_NEEDS_TILE ... */
-} cmd_entry_t;
 
 /* ================================================================
  * Internal helpers
@@ -425,538 +412,6 @@ static int gui_close(app_t* app)
     osfree(ctx);
     app->app_data = NULL;
     return 0;
-}
-
-/* ================================================================
- * Command handlers
- * ================================================================ */
-
-/* --- lifecycle (no tile needed) --- */
-static int handler_setspi(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    int n = va_arg(ap, int);
-    if (n < 1 || n > 2) return 0;
-    if (n == ctx->sspi_inst) return 0;
-    ctx->sspi_inst = n;
-    ctx->sspi_dev  = ctx->spi_dev[n - 1];
-    return 1;
-}
-
-static int handler_init(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr; (void)ap;
-    if (!ctx->sspi) return 0;
-    ctx->dev.init(ctx);
-    return 1;
-}
-
-static int handler_orient(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    uint8_t orient = (uint8_t)va_arg(ap, int);
-    uint8_t mcmd = 0x36;
-    appwrite(ctx->sspi, &mcmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
-    appwrite(ctx->sspi, &orient, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
-    return 1;
-}
-
-/* --- tile lifecycle (no tile needed) --- */
-static int handler_wcreate(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint16_t w = (uint16_t)va_arg(ap, int);
-    uint16_t h = (uint16_t)va_arg(ap, int);
-    KSCCOLOR bk = (KSCCOLOR)va_arg(ap, int);
-
-    int slot = tile_alloc_slot(ctx);
-    if (slot < 0) return 0;
-
-    tile_t* t = &ctx->tiles[slot];
-    t->win.ssx = x;
-    t->win.ssy = y;
-    t->win.width = w;
-    t->win.height = h;
-    t->win.bk = bk;
-
-    /* Auto Z: one above current max */
-    uint8_t max_z = 0;
-    for (uint8_t i = 0; i < TILE_MAX; i++) {
-        if (ctx->tiles[i].flags & TILE_F_USED)
-            if (ctx->tiles[i].z > max_z) max_z = ctx->tiles[i].z;
-    }
-    t->z = max_z + 1;
-
-    tile_h_t hnd = TILE_MAKE_HANDLE(t->gen, (uint8_t)slot);
-
-    /* Auto-clear: 填充背景色 */
-    kfull(&ctx->dev, &t->win, bk, x, y, w, h);
-
-    return (int)(uint8_t)hnd;
-}
-
-static int handler_wdelete(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    uint8_t was_active = (ctx->active_handle == h) ? 1 : 0;
-    tile_free_slot(ctx, (uint8_t)slot);
-    if (was_active) tile_active_fallback(ctx);
-    return 1;
-}
-
-static int handler_wselect(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->active_handle = h;
-    ctx->active_slot = (uint8_t)slot;
-    return 1;
-}
-
-/* --- tile visibility (no tile needed) --- */
-static int handler_whide(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].flags &= ~TILE_F_VISIBLE;
-    return 1;
-}
-
-static int handler_wshew(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].flags |= TILE_F_VISIBLE;
-    return 1;
-}
-
-static int handler_wtoggle(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].flags ^= TILE_F_VISIBLE;
-    return 1;
-}
-
-/* --- tile properties (no tile needed) --- */
-static int handler_wmove(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].win.ssx = (uint16_t)va_arg(ap, int);
-    ctx->tiles[slot].win.ssy = (uint16_t)va_arg(ap, int);
-    return 1;
-}
-
-static int handler_wresize(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].win.width = (uint16_t)va_arg(ap, int);
-    ctx->tiles[slot].win.height = (uint16_t)va_arg(ap, int);
-    return 1;
-}
-
-static int handler_wbk(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].win.bk = (KSCCOLOR)va_arg(ap, int);
-    return 1;
-}
-
-static int handler_wzorder(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    ctx->tiles[slot].z = (uint8_t)va_arg(ap, int);
-    return 1;
-}
-
-/* --- tile query (no tile needed) --- */
-static int handler_wactive(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr; (void)ap;
-    return (int)(uint8_t)ctx->active_handle;
-}
-
-static int handler_winfo(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    tile_info_t* info = va_arg(ap, tile_info_t*);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0 || !info) return 0;
-    tile_t* t = &ctx->tiles[slot];
-    info->handle = h;
-    info->x = t->win.ssx;
-    info->y = t->win.ssy;
-    info->w = t->win.width;
-    info->h = t->win.height;
-    info->bk = t->win.bk;
-    info->visible = (t->flags & TILE_F_VISIBLE) ? 1 : 0;
-    info->z = t->z;
-    info->is_active = (ctx->active_handle == h) ? 1 : 0;
-    info->obj_count = t->win.objnum;
-    return 1;
-}
-
-static int handler_wenum(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t* buf = va_arg(ap, tile_h_t*);
-    int* count_ptr = va_arg(ap, int*);
-    if (!buf || !count_ptr) return 0;
-    int max_out = *count_ptr;
-    int written = 0;
-    for (uint8_t i = 0; i < TILE_MAX && written < max_out; i++) {
-        if (ctx->tiles[i].flags & TILE_F_USED) {
-            buf[written++] = TILE_MAKE_HANDLE(ctx->tiles[i].gen, i);
-        }
-    }
-    *count_ptr = written;
-    return written;
-}
-
-/* --- explicit render (no tile needed) --- */
-
-/* Collect visible tile indices sorted by Z */
-static uint8_t tile_collect_sorted(gui_ctx_t* ctx, uint8_t* out, uint8_t max_out)
-{
-    uint8_t count = 0;
-    for (uint8_t i = 0; i < TILE_MAX && count < max_out; i++) {
-        if ((ctx->tiles[i].flags & (TILE_F_USED|TILE_F_VISIBLE)) == (TILE_F_USED|TILE_F_VISIBLE))
-            out[count++] = i;
-    }
-    /* Insertion sort by Z ascending */
-    for (uint8_t i = 1; i < count; i++) {
-        uint8_t key = out[i];
-        int j = (int)i - 1;
-        while (j >= 0 && ctx->tiles[out[j]].z > ctx->tiles[key].z) {
-            out[j + 1] = out[j];
-            j--;
-        }
-        out[j + 1] = key;
-    }
-    return count;
-}
-
-static int handler_trenderall(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr; (void)ap;
-    uint8_t order[TILE_MAX];
-    uint8_t count = tile_collect_sorted(ctx, order, TILE_MAX);
-    for (uint8_t i = 0; i < count; i++) {
-        tile_t* t = &ctx->tiles[order[i]];
-        kobjsdraw(&ctx->dev, &t->win, t->win.objbuf, t->win.objnum);
-    }
-    return 1;
-}
-
-static int handler_tredraw(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    tile_t* t = &ctx->tiles[slot];
-    if (!(t->flags & TILE_F_VISIBLE)) return 0;
-    kobjsdraw(&ctx->dev, &t->win, t->win.objbuf, t->win.objnum);
-    return 1;
-}
-
-static int handler_trender(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    tile_t* t = &ctx->tiles[slot];
-    if (!(t->flags & TILE_F_VISIBLE)) return 0;
-    kobjsdraw(&ctx->dev, &t->win, t->win.objbuf, t->win.objnum);
-    return 1;
-}
-
-/* --- drawing: active tile clear --- */
-static int handler_wclear(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)ap;
-    kfull(&ctx->dev, scr, scr->bk, 0, 0, scr->width, scr->height);
-    return 1;
-}
-
-static int handler_clear(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kfull(&ctx->dev, scr, c, 0, 0, scr->width, scr->height);
-    return 1;
-}
-
-/* --- drawing: primitives on active tile --- */
-static int handler_pixel(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    ksetpixel(&ctx->dev, scr, c, x, y);
-    return 1;
-}
-
-static int handler_fill(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint16_t w = (uint16_t)va_arg(ap, int);
-    uint16_t h = (uint16_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kfull(&ctx->dev, scr, c, x, y, w, h);
-    return 1;
-}
-
-static int handler_rect(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint16_t w = (uint16_t)va_arg(ap, int);
-    uint16_t h = (uint16_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kbox(&ctx->dev, scr, c, x, y, w, h);
-    return 1;
-}
-
-#if __DRAW_CIRCLE__
-static int handler_circle(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  r = (uint8_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kcircle(&ctx->dev, scr, c, x, y, r);
-    return 1;
-}
-
-static int handler_fcircle(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  r = (uint8_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kfillcircle(&ctx->dev, scr, c, x, y, r);
-    return 1;
-}
-#endif
-
-static int handler_line(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x0 = (uint16_t)va_arg(ap, int);
-    uint16_t y0 = (uint16_t)va_arg(ap, int);
-    uint16_t x1 = (uint16_t)va_arg(ap, int);
-    uint16_t y1 = (uint16_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kline(&ctx->dev, scr, c, x0, y0, x1, y1);
-    return 1;
-}
-
-#if __DRAW_CIRCLE__
-static int handler_arc(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  r = (uint8_t)va_arg(ap, int);
-    uint8_t  d = (uint8_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    karc(&ctx->dev, scr, c, x, y, r, d);
-    return 1;
-}
-
-static int handler_rrect(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint16_t w = (uint16_t)va_arg(ap, int);
-    uint16_t h = (uint16_t)va_arg(ap, int);
-    uint8_t  r = (uint8_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kroundrect(&ctx->dev, scr, c, x, y, w, h, r);
-    return 1;
-}
-
-static int handler_frrect(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint16_t w = (uint16_t)va_arg(ap, int);
-    uint16_t h = (uint16_t)va_arg(ap, int);
-    uint8_t  r = (uint8_t)va_arg(ap, int);
-    KSCCOLOR c = (KSCCOLOR)va_arg(ap, int);
-    kfillroundrect(&ctx->dev, scr, c, x, y, w, h, r);
-    return 1;
-}
-#endif
-
-static int handler_char(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x  = (uint16_t)va_arg(ap, int);
-    uint16_t y  = (uint16_t)va_arg(ap, int);
-    char     ch = (char)va_arg(ap, int);
-    KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
-    KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-    kchar(&ctx->dev, scr, ch, x, y, fg, bg);
-    return 1;
-}
-
-static int handler_string(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x  = (uint16_t)va_arg(ap, int);
-    uint16_t y  = (uint16_t)va_arg(ap, int);
-    const char* s = va_arg(ap, const char*);
-    KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
-    KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-    kstring(&ctx->dev, scr, s, x, y, fg, bg);
-    return 1;
-}
-
-#if __USE_CHINESE__
-static int handler_strcn(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x  = (uint16_t)va_arg(ap, int);
-    uint16_t y  = (uint16_t)va_arg(ap, int);
-    const char* s = va_arg(ap, const char*);
-    KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
-    KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-    kstringchinese(&ctx->dev, scr, s, x, y, fg, bg);
-    return 1;
-}
-#endif
-
-/* --- image (direct SPI fast-path, on active tile) --- */
-static int handler_image(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  w = (uint8_t)va_arg(ap, int);
-    uint8_t  h = (uint8_t)va_arg(ap, int);
-    const uint8_t* img = va_arg(ap, const uint8_t*);
-    gui_window_setcanvas(&ctx->dev, scr, x, y, w, h);
-    uint16_t remain = w * h * 2;
-    while (remain) {
-        uint16_t n = (remain > sizeof(ctx->pixbuf)) ? (uint16_t)sizeof(ctx->pixbuf) : remain;
-        memcpy(ctx->pixbuf, img, n);
-        appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
-        img += n;
-        remain -= n;
-    }
-    return 1;
-}
-
-static int handler_ibig(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  w = (uint8_t)va_arg(ap, int);
-    uint8_t  h = (uint8_t)va_arg(ap, int);
-    uint8_t  s = (uint8_t)va_arg(ap, int);
-    const uint8_t* img = va_arg(ap, const uint8_t*);
-    for (uint8_t hh = 0; hh < h; hh++) {
-        for (uint8_t ww = 0; ww < w; ww++) {
-            KSCCOLOR c = ((KSCCOLOR)img[0] << 8) | img[1];
-            img += 2;
-            kfull(&ctx->dev, scr, c, x + ww * s, y + hh * s, s, s);
-        }
-    }
-    return 1;
-}
-
-static int handler_ibin(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    uint16_t x = (uint16_t)va_arg(ap, int);
-    uint16_t y = (uint16_t)va_arg(ap, int);
-    uint8_t  w = (uint8_t)va_arg(ap, int);
-    uint8_t  h = (uint8_t)va_arg(ap, int);
-    const uint8_t* img = va_arg(ap, const uint8_t*);
-    KSCCOLOR fg = (KSCCOLOR)va_arg(ap, int);
-    KSCCOLOR bg = (KSCCOLOR)va_arg(ap, int);
-    kimagebin(&ctx->dev, scr, img, x, y, w, h, fg, bg);
-    return 1;
-}
-
-/* ================================================================
- * appwrite dispatch (高频: 不走 ioctl strcmp)
- * mode 低4位: 1=DRAWOBJ, 2=DRAWOBJS
- * ================================================================ */
-static int gui_write(app_t* app, void* data, uint32_t count, uint32_t mode)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    if (!ctx || !ctx->active_handle) return 0;
-    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
-
-    switch (mode & 0x0F) {
-    case 0x01:  /* DRAWOBJ */
-        if (!data || count != 1) return 0;
-        kobjdraw(&ctx->dev, scr, (ksc_obj_t*)data);
-        return 1;
-    case 0x02:  /* DRAWOBJS */
-        if (!data || count == 0) return 0;
-        kobjsdraw(&ctx->dev, scr, (ksc_obj_t*)data, (uint16_t)count);
-        return (int)count;
-    }
-    return 0;
-}
-
-/* --- ioctl object pool / drawfunc (低频) --- */
-static int handler_getobjpool(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    int* count = va_arg(ap, int*);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0 || !count) return 0;
-    tile_t* t = &ctx->tiles[slot];
-    *count = (int)t->win.objnum;
-    return (int)(intptr_t)t->win.objbuf;
-}
-
-static int handler_setobjpool(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)ctx; (void)scr;
-    tile_h_t h = (tile_h_t)va_arg(ap, int);
-    ksc_obj_t* objs = va_arg(ap, ksc_obj_t*);
-    int count = va_arg(ap, int);
-    int slot = tile_slot_by_handle(ctx, h);
-    if (slot < 0) return 0;
-    tile_t* t = &ctx->tiles[slot];
-    t->win.objbuf = objs;
-    t->win.objnum = (uint8_t)count;
-    return 1;
-}
-
-static int handler_setdrawfunc(gui_ctx_t* ctx, KSC_window* scr, va_list ap)
-{
-    (void)ctx; (void)scr;
-    int idx = va_arg(ap, int);
-    draw_fn fn = va_arg(ap, draw_fn);
-    return (ksc_set_draw_func((uint8_t)idx, fn) == 0) ? 1 : 0;
 }
 
 /* ================================================================
@@ -1464,8 +919,11 @@ static int cmd_wenum(app_t* app, const char** argv)
 }
 
 /* ================================================================
- * appcmd: explicit render
+ * appcmd: explicit render (trenderall / tredraw / trender)
  * ================================================================ */
+
+/* forward declaration for tile_collect_sorted (defined in Internal helpers) */
+static uint8_t tile_collect_sorted(gui_ctx_t* ctx, uint8_t* order, uint8_t max);
 
 static int cmd_trenderall(app_t* app, const char** argv)
 {
@@ -1610,86 +1068,6 @@ static int cmd_ibin(app_t* app, const char** argv)
 }
 
 /* ================================================================
- * Command dispatch table
- * ================================================================ */
-static const cmd_entry_t cmd_table[] = {
-    /* lifecycle */
-    {"setspi",  handler_setspi,  0},
-    {"init",    handler_init,    0},
-    {"orient",  handler_orient,  0},
-    /* tile lifecycle */
-    {"wcreate", handler_wcreate, 0},
-    {"wdelete", handler_wdelete, 0},
-    {"wselect", handler_wselect, 0},
-    /* tile visibility */
-    {"whide",   handler_whide,   0},
-    {"wshew",   handler_wshew,   0},
-    {"wtoggle", handler_wtoggle, 0},
-    /* tile properties */
-    {"wmove",   handler_wmove,   0},
-    {"wresize", handler_wresize, 0},
-    {"wbk",     handler_wbk,     0},
-    {"wzorder", handler_wzorder, 0},
-    /* tile query */
-    {"wactive", handler_wactive, 0},
-    {"winfo",   handler_winfo,   0},
-    {"wenum",   handler_wenum,   0},
-    /* explicit render */
-    {"trenderall", handler_trenderall, 0},
-    {"tredraw", handler_tredraw, 0},
-    {"trender", handler_trender, 0},
-    /* active tile drawing */
-    {"wclear",  handler_wclear,  CMD_NEEDS_TILE},
-    {"clear",   handler_clear,   CMD_NEEDS_TILE},
-    {"pixel",   handler_pixel,   CMD_NEEDS_TILE},
-    {"fill",    handler_fill,    CMD_NEEDS_TILE},
-    {"frect",   handler_fill,    CMD_NEEDS_TILE},
-    {"rect",    handler_rect,    CMD_NEEDS_TILE},
-#if __DRAW_CIRCLE__
-    {"circle",  handler_circle,  CMD_NEEDS_TILE},
-    {"fcircle", handler_fcircle, CMD_NEEDS_TILE},
-#endif
-    {"line",    handler_line,    CMD_NEEDS_TILE},
-#if __DRAW_CIRCLE__
-    {"arc",     handler_arc,     CMD_NEEDS_TILE},
-    {"rrect",   handler_rrect,   CMD_NEEDS_TILE},
-    {"frrect",  handler_frrect,  CMD_NEEDS_TILE},
-#endif
-    {"char",    handler_char,    CMD_NEEDS_TILE},
-    {"string",  handler_string,  CMD_NEEDS_TILE},
-#if __USE_CHINESE__
-    {"strcn",   handler_strcn,   CMD_NEEDS_TILE},
-#endif
-    {"image",   handler_image,   CMD_NEEDS_TILE},
-    {"ibig",    handler_ibig,    CMD_NEEDS_TILE},
-    {"ibin",    handler_ibin,    CMD_NEEDS_TILE},
-    /* object pool */
-    {"getobjpool", handler_getobjpool, 0},
-    {"setobjpool", handler_setobjpool, 0},
-    {"setdrawfunc", handler_setdrawfunc, 0},
-};
-#define CMD_TABLE_SIZE (sizeof(cmd_table)/sizeof(cmd_table[0]))
-
-/* ================================================================
- * ioctl dispatcher
- * ================================================================ */
-static int gui_ioctl(app_t* app, const char* cmd, va_list ap)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    for (size_t i = 0; i < CMD_TABLE_SIZE; i++) {
-        if (strcmp(cmd, cmd_table[i].name) == 0) {
-            if (cmd_table[i].flags & CMD_NEEDS_TILE) {
-                if (!ctx->active_handle) return 0;
-                KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
-                return cmd_table[i].handler(ctx, scr, ap);
-            }
-            return cmd_table[i].handler(ctx, NULL, ap);
-        }
-    }
-    return 0;
-}
-
-/* ================================================================
  * appcmd dispatcher (table-driven)
  * ================================================================ */
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } gui_appcmd_t;
@@ -1750,6 +1128,39 @@ static int gui_cmd(app_t* app, const char* cmd, const char** argv)
             return e->handler(app, argv);
     }
     return -1;
+}
+
+/* ================================================================
+ * Internal helpers
+ * ================================================================ */
+
+static uint8_t tile_collect_sorted(gui_ctx_t* ctx, uint8_t* order, uint8_t max)
+{
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < TILE_MAX && n < max; i++) {
+        if (ctx->tiles[i].flags & TILE_F_USED)
+            order[n++] = i;
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        for (uint8_t j = i + 1; j < n; j++) {
+            if (ctx->tiles[order[j]].z < ctx->tiles[order[i]].z) {
+                uint8_t t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+        }
+    }
+    return n;
+}
+
+static int gui_write(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    gui_ctx_t* ctx = app->app_data;
+    if (!ctx || !ctx->active_handle) return 0;
+    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
+    if (mode == 1 && data)
+        kobjdraw(&ctx->dev, scr, (ksc_obj_t*)data);
+    else if (mode == 2 && data)
+        kobjsdraw(&ctx->dev, scr, (ksc_obj_t*)data, (uint8_t)count);
+    return (int)count;
 }
 
 /* ================================================================

@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 #include "KSCconfig.h"
-#include "dd.h"
 
 #define KSCOS_LOW_CLOCK 0
 #define KSCOS_NORMAL_CLOCK 1

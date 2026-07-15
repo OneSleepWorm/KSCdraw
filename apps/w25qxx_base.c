@@ -1,6 +1,7 @@
 /**
  * @file    w25qxx_base.c
  * @note    W25Q64 SPI NOR Flash 基础驱动 (app 层, 依赖 super_spi2)
+ * @flash   ~2128B (Debug, -Og)
  *
  * ============================================================
  * 基本信息
@@ -89,8 +90,8 @@
  */
 
 #include "../inc/app.h"
-#include "../inc/super_spi.h"
 #include "../inc/KSCOSsystem.h"
+#include "app_config.h"
 #include <string.h>
 #if __USE_STM32__
 

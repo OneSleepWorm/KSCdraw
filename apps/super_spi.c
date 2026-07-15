@@ -1,6 +1,7 @@
 /**
  * @file    super_spi.c
  * @note    SPI 总线主控 — 统一 SPI1+SPI2, 无 pdrv 依赖 (STM32)
+ * @flash   ~2672B (Debug, -Og)
  *
  * ============================================================
  * 基本信息
@@ -91,11 +92,9 @@
  */
 
 #include "../inc/app.h"
-#include "../inc/super_spi.h"
 #include "../inc/KSCOSsystem.h"
 #include "app_config.h"
 #include <string.h>
-#if __USE_STM32__
 #include "stm32f1xx.h"
 
 #define SSPI_DEV_MAX 4
@@ -557,5 +556,3 @@ static const papp_ops_t sspi_app_ops = {
 
 REGISTER_APP_EX("super_spi", "0", "1\0gpio_port",
     &sspi_app_ops, "Unified SPI1+SPI2 bus master (gpio_port)");
-
-#endif
