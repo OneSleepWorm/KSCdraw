@@ -193,6 +193,11 @@ int appcmd(app_t* app, const char* cmdline)
             }
             if (!(*p == '-' && (p[1] >= 'a' && p[1] <= 'z'))) {
                 argv[idx] = p;
+                if (*p == '"') {
+                    argv[idx] = ++p;
+                    while (*p && *p != '"') p++;
+                    if (*p == '"') *p++ = '\0';
+                }
                 while (*p && *p != ' ') p++;
             } else {
                 argv[idx] = "";

@@ -7,8 +7,7 @@
 #include "KSCconfig.h"
 #include "application.h"
 #include "KSCOSsystem.h"
-#include "dd.h"
 
-// #include "SDL3/SDL.h"
+
 #endif
 

@@ -117,9 +117,9 @@ void sys_init(void)
 void KSCOSSystemClock_Init(uint8_t clock_type) { (void)clock_type; }
 #endif
 
-void* osmalloc(size_t size) { kscprintf("osmalloc: %d\r\n", size); return malloc(size); }
-void osfree(void* ptr) { kscprintf("osfree: %p\r\n", ptr); free(ptr); }
-void* oscalloc(size_t num, size_t size) { kscprintf("oscalloc: %d, %d\r\n", num, size); return calloc(num, size); }
+void* osmalloc(size_t size) { return malloc(size); }
+void osfree(void* ptr) { free(ptr); }
+void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
 
 #if __USE_STM32__
 void KSCOS_Error_Handler(void)

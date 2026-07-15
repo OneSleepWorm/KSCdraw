@@ -10,4 +10,5 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/littlefs_fs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/list.c
     ${CMAKE_CURRENT_SOURCE_DIR}/ctrl_list.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/terminal.c
 )
