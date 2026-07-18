@@ -99,6 +99,8 @@ typedef void (*ctrl_event_cb_t)(void* user_data, int event);
 typedef struct {
     uint8_t up;
     uint8_t down;
+    uint8_t left;
+    uint8_t right;
     uint8_t ok;
     uint8_t quit;
 } ctrl_keymap_t;

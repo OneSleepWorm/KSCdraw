@@ -60,6 +60,7 @@ typedef int16_t ki16;
 #include <stdio.h>
 #include <windows.h>
 #define log(...) 0
+#define KSC_PC_SCALE 2   /* PC window zoom: 1, 2, or 3 */
 
 #endif
 

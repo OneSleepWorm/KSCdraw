@@ -70,10 +70,10 @@ app_t* appget(const char* name)
     }
 
     /* 2. 查 papp 表 */
-    size_t app_count = ((const char*)__stop_papp_table - (const char*)__start_papp_table) / sizeof(papp_t);
+    size_t app_count = ((const char*)__stop_app_table - (const char*)__start_app_table) / sizeof(papp_t);
 
     for (size_t i = 0; i < app_count; i++) {
-        const papp_t* papp = &__start_papp_table[i];
+        const papp_t* papp = &__start_app_table[i];
         if (!papp->base || strcmp(name, papp->base->app_name) != 0)
             continue;
 

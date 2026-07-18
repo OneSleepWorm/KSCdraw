@@ -494,4 +494,147 @@ static const papp_ops_t w25_app_ops = {
 
 REGISTER_APP_EX("w25qxx_base", "0", "1\0super_spi", &w25_app_ops, "W25Q64 SPI NOR Flash");
 
-#endif
+#elif __USE_PC__
+
+#include <stdio.h>
+#include <string.h>
+#include <windows.h>
+
+#define PC_FLASH_SIZE     (2048 * 4096)
+#define PC_FLASH_SECTOR   4096
+
+typedef struct {
+    FILE*  fp;
+    uint32_t addr;
+    char   path[MAX_PATH];
+} pc_flash_ctx_t;
+
+static void pc_flash_path(char* path, size_t sz)
+{
+    GetModuleFileNameA(NULL, path, (DWORD)sz);
+    for (int i = 0; i < 2; i++) {
+        char* sep = strrchr(path, '\\');
+        if (sep) *sep = '\0';
+    }
+    strcat(path, "\\.data\\flash.bin");
+}
+
+static void pc_flash_mkdir(const char* path)
+{
+    char dir[MAX_PATH];
+    strcpy(dir, path);
+    char* sep = strrchr(dir, '\\');
+    if (sep) { *sep = '\0'; CreateDirectoryA(dir, NULL); }
+}
+
+static int pc_flash_open(app_t* app)
+{
+    pc_flash_ctx_t* ctx = (pc_flash_ctx_t*)osmalloc(sizeof(pc_flash_ctx_t));
+    if (!ctx) return -1;
+    memset(ctx, 0, sizeof(*ctx));
+
+    pc_flash_path(ctx->path, sizeof(ctx->path));
+    pc_flash_mkdir(ctx->path);
+
+    ctx->fp = fopen(ctx->path, "r+b");
+    if (!ctx->fp) {
+        ctx->fp = fopen(ctx->path, "wb");
+        if (!ctx->fp) { osfree(ctx); return -1; }
+        uint8_t buf[PC_FLASH_SECTOR];
+        memset(buf, 0xFF, PC_FLASH_SECTOR);
+        for (uint32_t i = 0; i < PC_FLASH_SIZE / PC_FLASH_SECTOR; i++)
+            fwrite(buf, 1, PC_FLASH_SECTOR, ctx->fp);
+        fclose(ctx->fp);
+        ctx->fp = fopen(ctx->path, "r+b");
+        if (!ctx->fp) { osfree(ctx); return -1; }
+    }
+    app->app_data = ctx;
+    return 0;
+}
+
+static int pc_flash_close(app_t* app)
+{
+    pc_flash_ctx_t* ctx = (pc_flash_ctx_t*)app->app_data;
+    if (ctx) {
+        if (ctx->fp) fclose(ctx->fp);
+        osfree(ctx);
+        app->app_data = NULL;
+    }
+    return 0;
+}
+
+static int pc_flash_write(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    pc_flash_ctx_t* ctx = (pc_flash_ctx_t*)app->app_data;
+    if (!ctx || !ctx->fp) return -1;
+
+    switch (mode) {
+    case 0: return 0;
+    case 1:
+        if (count < 4) return -1;
+        ctx->addr = *(uint32_t*)data;
+        return 4;
+    case 3:
+        if (!data || !count) return -1;
+        fseek(ctx->fp, ctx->addr, SEEK_SET);
+        fwrite(data, 1, count, ctx->fp);
+        return (int)count;
+    case 5:
+    {
+        uint8_t buf[PC_FLASH_SECTOR];
+        memset(buf, 0xFF, PC_FLASH_SECTOR);
+        fseek(ctx->fp, ctx->addr, SEEK_SET);
+        fwrite(buf, 1, PC_FLASH_SECTOR, ctx->fp);
+        return 0;
+    }
+    case 6:
+    {
+        uint8_t buf[PC_FLASH_SECTOR];
+        memset(buf, 0xFF, PC_FLASH_SECTOR);
+        fseek(ctx->fp, 0, SEEK_SET);
+        for (uint32_t i = 0; i < PC_FLASH_SIZE / PC_FLASH_SECTOR; i++)
+            fwrite(buf, 1, PC_FLASH_SECTOR, ctx->fp);
+        return 0;
+    }
+    default: return -1;
+    }
+}
+
+static int pc_flash_read(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    pc_flash_ctx_t* ctx = (pc_flash_ctx_t*)app->app_data;
+    if (!ctx || !ctx->fp) return -1;
+
+    switch (mode) {
+    case 0: return 0;
+    case 1:
+        if (!data || !count) return -1;
+        fseek(ctx->fp, ctx->addr, SEEK_SET);
+        return (int)fread(data, 1, count, ctx->fp);
+    case 3:
+        ((uint8_t*)data)[0] = 0xEF;
+        ((uint8_t*)data)[1] = 0x40;
+        ((uint8_t*)data)[2] = 0x17;
+        return 3;
+    default: return -1;
+    }
+}
+
+static int pc_flash_cmd(app_t* app, const char* cmdname, const char** argv)
+{
+    (void)app; (void)cmdname; (void)argv;
+    return -1;
+}
+
+static const papp_ops_t pc_flash_ops = {
+    .open  = pc_flash_open,
+    .close = pc_flash_close,
+    .read  = pc_flash_read,
+    .write = pc_flash_write,
+    .cmd   = pc_flash_cmd,
+};
+
+REGISTER_APP_EX("w25qxx_base", "0", "0", &pc_flash_ops,
+    "PC file-backed flash emulation");
+
+#endif /* __USE_STM32__ / __USE_PC__ */

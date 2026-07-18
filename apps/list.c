@@ -119,7 +119,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#if __USE_STM32__
+#if __USE_STM32__ || __USE_PC__
 
 /* ── 常量 ── */
 
@@ -129,6 +129,10 @@
 #define LIST_ITEM_H_DEF   20
 #define LIST_FRAG_MAX     8
 #define LIST_FRAG_MIN     8
+
+#define CTRL_INTERVAL_MS  20
+#define CTRL_HOLD_TICKS   25
+#define CTRL_HOLD_GAP     6
 
 /* ── 碎片 ── */
 
@@ -161,6 +165,14 @@ typedef struct {
     tile_h_t    tile;
     uint8_t     hw_opened;
     uint8_t     sel_style;
+
+    app_t*          kpd;
+    app_t*          tim;
+    ctrl_keymap_t   km;
+    ctrl_event_cb_t ctrl_cb;
+    void*           ctrl_user;
+    uint16_t        ctrl_interval_ms;
+    uint8_t         ctrl_enabled;
 } list_ctx_t;
 
 /* ── 碎片管理 ── */
@@ -456,6 +468,9 @@ static int list_open(app_t* app)
     ctx->sel_fg  = 0xFFFF;
     ctx->sel_style = LIST_STYLE_FILLROW;
 
+    ctx->km.up = 6; ctx->km.down = 14; ctx->km.left = 9; ctx->km.right = 11; ctx->km.ok = 10; ctx->km.quit = 0;
+    ctx->ctrl_interval_ms = CTRL_INTERVAL_MS;
+
     app->app_data = ctx;
     return 0;
 }
@@ -464,6 +479,8 @@ static int list_close(app_t* app)
 {
     list_ctx_t* ctx = (list_ctx_t*)app->app_data;
     if (!ctx) return 0;
+    if (ctx->ctrl_enabled)
+        appwrite(ctx->tim, NULL, 0, 0x42);
     if (ctx->hw_opened)
         appclose(ctx->gui);
     osfree(ctx);
@@ -473,10 +490,28 @@ static int list_close(app_t* app)
 
 /* ── appcmd handlers ── */
 
+static void* list_tick_cb(void* data);
+
 static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
 {
-    (void)app; (void)argv;
+    (void)app;
     if (ctx->hw_opened) return -1;
+
+    /* save ctrl flags before appcmd(ctx->gui, ...) corrupts argv */
+    int want_k = APPCMD_HAS(argv, 'k');
+    int has_u = want_k && APPCMD_HAS(argv, 'u');
+    int has_d = want_k && APPCMD_HAS(argv, 'd');
+    int has_l = want_k && APPCMD_HAS(argv, 'l');
+    int has_r = want_k && APPCMD_HAS(argv, 'r');
+    int has_o = want_k && APPCMD_HAS(argv, 'o');
+    int has_q = want_k && APPCMD_HAS(argv, 'q');
+    uint8_t k_up   = has_u ? (uint8_t)strtoul(argv[APPCMD_ARG('u')], NULL, 0) : 0;
+    uint8_t k_down = has_d ? (uint8_t)strtoul(argv[APPCMD_ARG('d')], NULL, 0) : 0;
+    uint8_t k_left = has_l ? (uint8_t)strtoul(argv[APPCMD_ARG('l')], NULL, 0) : 0;
+    uint8_t k_right= has_r ? (uint8_t)strtoul(argv[APPCMD_ARG('r')], NULL, 0) : 0;
+    uint8_t k_ok   = has_o ? (uint8_t)strtoul(argv[APPCMD_ARG('o')], NULL, 0) : 0;
+    uint8_t k_quit = has_q ? (uint8_t)strtoul(argv[APPCMD_ARG('q')], NULL, 0) : 0;
+
     if (appopen(ctx->gui) < 0) return -1;
     appcmd(ctx->gui, "init");
     sysdelay(10);
@@ -489,6 +524,31 @@ static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
     ctx->hw_opened = 1;
     obj_sync(ctx);
     list_render(ctx);
+
+    if (want_k) {
+        if (!ctx->kpd) ctx->kpd = appget("button16");
+        if (!ctx->tim) ctx->tim = appget("tim_clock");
+        if (!ctx->kpd || !ctx->tim) return -1;
+        if (has_u) ctx->km.up   = k_up;
+        if (has_d) ctx->km.down = k_down;
+        if (has_l) ctx->km.left = k_left;
+        if (has_r) ctx->km.right= k_right;
+        if (has_o) ctx->km.ok   = k_ok;
+        if (has_q) ctx->km.quit = k_quit;
+        ctx->ctrl_cb   = (ctrl_event_cb_t)app->mode_data;
+        ctx->ctrl_user = app->callback_data;
+        if (appopen(ctx->kpd) < 0) return -1;
+        appwrite(ctx->kpd, NULL, 0, 1);
+        { uint32_t iv = ctx->ctrl_interval_ms; appwrite(ctx->kpd, &iv, 1, 2); }
+        { uint32_t enable = 1; appwrite(ctx->kpd, &enable, 1, 4); }
+        { uint32_t p[2] = {CTRL_HOLD_TICKS, CTRL_HOLD_GAP}; appwrite(ctx->kpd, p, 2, 5); }
+        ctx->tim->callback = list_tick_cb;
+        ctx->tim->user_data = app;
+        appopen(ctx->tim);
+        appwrite(ctx->tim, NULL, ctx->ctrl_interval_ms, 0x41);
+        appwrite(ctx->tim, NULL, 1, 0x42);
+        ctx->ctrl_enabled = 1;
+    }
     return 1;
 }
 
@@ -576,8 +636,8 @@ static int cmd_getlabel(app_t* app, list_ctx_t* ctx, const char** argv)
 
 static int cmd_setpos(app_t* app, list_ctx_t* ctx, const char** argv)
 {
-    (void)app;
     if (APPCMD_HAS(argv, 'x')) ctx->x = (uint8_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
+    else if (app->user_data) { const list_pos_t* p = (const list_pos_t*)app->user_data; ctx->x = p->x; ctx->y = p->y; ctx->w = p->w; ctx->h = p->h; ctx->item_h = p->item_h; }
     if (APPCMD_HAS(argv, 'y')) ctx->y = (uint8_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
     if (APPCMD_HAS(argv, 'w')) ctx->w = (uint8_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
     if (APPCMD_HAS(argv, 'h')) ctx->h = (uint8_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
@@ -594,8 +654,8 @@ static int cmd_setpos(app_t* app, list_ctx_t* ctx, const char** argv)
 
 static int cmd_setcolors(app_t* app, list_ctx_t* ctx, const char** argv)
 {
-    (void)app;
     if (APPCMD_HAS(argv, 'a')) ctx->sel_bg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('a')], NULL, 16);
+    else if (app->user_data) { const list_colors_t* c = (const list_colors_t*)app->user_data; ctx->sel_bg = c->sel_bg; ctx->bg = c->bg; ctx->fg = c->fg; ctx->sel_fg = c->sel_fg; }
     if (APPCMD_HAS(argv, 'b')) ctx->bg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('b')], NULL, 16);
     if (APPCMD_HAS(argv, 'c')) ctx->fg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
     if (APPCMD_HAS(argv, 'd')) ctx->sel_fg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('d')], NULL, 16);
@@ -626,6 +686,38 @@ static int cmd_refresh(app_t* app, list_ctx_t* ctx, const char** argv)
     obj_sync(ctx);
     list_render(ctx);
     return 1;
+}
+
+/* ── 键盘控制定时回调 ── */
+
+static void* list_tick_cb(void* data)
+{
+    app_t* app = (app_t*)data;
+    list_ctx_t* ctx = (list_ctx_t*)app->app_data;
+    if (!ctx || !ctx->ctrl_enabled) return NULL;
+
+    uint32_t ev;
+    while (ctx->kpd && appread(ctx->kpd, &ev, 0, 3) > 0) {
+        uint8_t key  = (ev >> 4) & 0xF;
+        uint8_t type = ev & 0xF;
+
+        if (key == ctx->km.up || key == ctx->km.down || key == ctx->km.left || key == ctx->km.right) {
+            if (type == 0 || type == 2 || type == 4) {
+                int delta = (key == ctx->km.down || key == ctx->km.right) ? 1 : -1;
+                do_move(ctx, delta);
+            }
+        } else if (type == 0) {
+            if (key == ctx->km.ok) {
+                cmd_confirm(app, ctx, NULL);
+                if (ctx->ctrl_cb)
+                    ctx->ctrl_cb(ctx->ctrl_user, CTRL_EVENT_CONFIRM);
+            } else if (key == ctx->km.quit) {
+                if (ctx->ctrl_cb)
+                    ctx->ctrl_cb(ctx->ctrl_user, CTRL_EVENT_QUIT);
+            }
+        }
+    }
+    return NULL;
 }
 
 /* ── appcmd dispatch ── */

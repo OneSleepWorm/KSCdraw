@@ -141,14 +141,27 @@ volatile uint32_t KSCOSsystem_Clock = 0;
 void sysdelay(uint32_t ms) { Sleep(ms); }
 uint32_t sysgettime(void) { return GetTickCount(); }
 
-void sys_init(void) { }
+void sys_init(void)
+{
+    app_t* con = appget("uart_serial");
+    if (con) {
+        appopen(con);
+        ksc_console = con;
+    }
+}
 
 void kscprintf(const char* fmt, ...)
 {
+    if (!ksc_console) return;
     va_list ap;
     va_start(ap, fmt);
-    vprintf(fmt, ap);
+    char buf[128];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+    if (n > 0) {
+        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+        appwrite(ksc_console, buf, len, 0x11);
+    }
 }
 
 void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }

@@ -63,8 +63,8 @@ typedef struct app_t {
         &_APP_CONCAT(_APP_BASE_, __LINE__), dep, app_dep, ops \
     }
 
-extern const papp_t __start_papp_table[];
-extern const papp_t __stop_papp_table[];
+extern const papp_t __start_app_table[];
+extern const papp_t __stop_app_table[];
 
 app_t* appget(const char* name);
 void   appfree(app_t* app);

@@ -1,130 +1,52 @@
 /**
  * @file    button16.c
- * @note    4×4 矩阵键盘扫描应用 (STM32)
- * @flash   ~1658B (Debug, -Og)
- * 
+ * @note    4×4 矩阵键盘扫描应用 (STM32 + PC)
+ *
  * ============================================================
  * 基本信息
  * ============================================================
  * 注册名:  button16
- * 依赖:    gpio_port (app) + tim_clock (app)
- * 平台:    STM32 (__USE_STM32__)
- * 
+ * 平台:    STM32 (__USE_STM32__) + PC (__USE_PC__)
+ *
  * ============================================================
- * 用途
+ * 官方 4×4 键位布局 (1-indexed)
  * ============================================================
- * 扫描 4×4 矩阵键盘，支持两种读取模式：
- *   - 简单模式: 返回 16-bit raw 位图 (每键 1 bit)
- *   - 复杂模式: 提供事件队列，支持 PRESS/RELEASE/HOLD/LONG/DBLCLICK
- * 
- * 行 (Row0-3) 接 GPIO 低 4 位 (输出)
- * 列 (Col0-3) 接 GPIO 高 4 位 (输入)
- * 
+ *
+ *    ┌────┬────┬────┬────┐
+ *    │  1 │  2 │  3 │  4 │   ← 1=退出
+ *    ├────┼────┼────┼────┤
+ *    │  5 │  6 │  7↑│  8 │   ← 7=上
+ *    ├────┼────┼────┼────┤
+ *    │  9 │ 10←│ 11○│ 12→│   ← 10=左  11=确认/暂停  12=右
+ *    ├────┼────┼────┼────┤
+ *    │ 13 │ 14 │ 15↓│ 16 │   ← 15=下
+ *    └────┴────┴────┴────┘
+ *
+ *   2 3 4 5 9 13 = 自定义扩展按键
+ *
  * ============================================================
  * 使用方法
  * ============================================================
- * 
  *   app_t* kpd = appget("button16");
- *   if (!kpd) while(1);
  *   appopen(kpd);
- * 
- *   // 初始化硬件 (mode=1) + 启动定时扫描 (mode=2)
- *   uint32_t interval = 50;  // 50ms 扫描间隔
- *   appwrite(kpd, NULL, 0, 1);
- *   appwrite(kpd, &interval, 1, 2);
- * 
- *   // 简单模式: 读 raw key state (mode=1)
- *   uint32_t keys;
- *   appread(kpd, &keys, 0, 1);
- *   // keys bit n = 1 表示按键 n 按下
- * 
- *   // 复杂模式: 读事件队列 (mode=3)
+ *   appwrite(kpd, NULL, 0, 1);          // 初始化
+ *   uint32_t iv = 50;
+ *   appwrite(kpd, &iv, 1, 2);           // 启动扫描
  *   uint32_t ev;
- *   int ret = appread(kpd, &ev, 0, 3);
- *   if (ret > 0) {
- *       uint8_t key = (ev >> 4) & 0xF;   // 键号 0-15
- *       uint8_t type = ev & 0xF;          // 事件类型
- *       // type: 0=PRESS 1=RELEASE 2=HOLD 3=LONG 4=DBLCLICK
- *   }
- * 
- * ============================================================
- * appwrite / appread mode 表
- * ============================================================
- * 操作  | mode | data       | count | 功能
- * ------+------+------------+-------+-------------------------------
- * write |  1   | NULL       | 0     | 初始化 GPIO (推挽输出 + 上拉输入)
- * write |  2   | uint32_t*  | 1     | 设扫描间隔(ms), 启动定时器
- * write |  4   | uint32_t*  | 1     | 1=开启复杂模式 0=关闭
- * write |  5   | uint32_t[2]| 1-2   | {hold_ticks, hold_gap} HOLD参数
- * read  |  1   | uint32_t*  | 0     | 返回 latest_keys (16-bit raw)
- * read  |  2   | uint32_t*  | 0     | 返回 interval_ms
- * read  |  3   | uint32_t*  | 0     | 弹出事件 (复杂模式)
- * 
- * ============================================================
- * 事件打包格式 (mode=3)
- * ============================================================
- *   bit 31   = 1 (标志位)
- *   bits 7-4 = 键号 (0-15)
- *   bits 3-0 = 事件类型
- *             0: PRESS   1: RELEASE  2: HOLD
- *             3: LONG    4: DBLCLICK
- * 
- * ============================================================
- * 按键定义
- * ============================================================
- *   行/列映射: Row0-3 = GPIO bits 0-3 (输出)
- *              Col0-3 = GPIO bits 4-7 (输入上拉)
- *   按键编号:  key = row*4 + col  (0-15)
- * 
- * ============================================================
- * 注意事项
- * ============================================================
- * 1. 必须先 appwrite(mode=1) 初始化硬件，再 mode=2 启动定时器
- * 2. 复杂模式默认启用；禁用后节省内存 (cpx 结构体 ~60B)
- * 3. 事件队列 16 槽，溢出时新事件丢弃
- * 4. 扫描间隔建议 30-100ms，精度由 tim_clock_3 决定
- * 5. 去抖算法: 按下后 hold_ticks(default 4)=200ms 进入 HOLD,
- *    进入 HOLD 后每 hold_gap(default 1) tick 发一次 HOLD,
- *    LONG_TICKS(20)=1000ms 触发 LONG,
- *    DBL_TICKS(8)=400ms 窗口内第二次按下触发 DBLCLICK
- *    HOLD 参数通过 appwrite(NULL, p, 2, 5) 配置: p[0]=hold_ticks, p[1]=hold_gap
+ *   appread(kpd, &ev, 0, 3);            // 弹事件
+ *   appclose(kpd);
  *
- * ============================================================
- * 资源占用 (LTO差分法: 移除 button16.c 后固件尺寸差值)
- * ============================================================
- *   ROM(Debug -O0):   1,828 B
- *   ROM(Release -Os):   988 B
- *   RAM(静态):   0 B
- *   RAM(堆):     btn16_data_t (~20 B) + btn16_cpx_t (~150 B) = ~170 B
- *
- * ============================================================
- * 外部接口
- * ============================================================
- *   appget("button16") → app_t*
- *   appopen(kpd)       : 分配数据, 默认启用复杂模式
- *   appwrite(mode=1)   : 初始化 GPIO (推挽输出+上拉输入)
- *   appwrite(mode=2)   : 设置扫描间隔并启动 TIM3
- *   appwrite(mode=4)   : 切换复杂模式 (1=开 0=关)
- *   appwrite(mode=5)   : 设置 {hold_ticks, hold_gap}
- *   appread(mode=1)    : 读 latest_keys (16-bit raw bitmap)
- *   appread(mode=2)    : 读 interval_ms
- *   appread(mode=3)    : 弹出一个事件 (复杂模式)
- *   appclose(kpd)      : 停止扫描, 释放内存
- * ============================================================
- * 推荐应用布局
- * ============================================================
- *   0=quit | 1 | 2 | 3 |
- *      5-7,9-11,13-15=direction
- *   4  | 5 |   6=up | 7 | == 
- *   8  | 9=left | 10=ok| 11=right|
- *  12  | 13|   14=down| 15|
+ * 完整接口见 `appwrite / appread mode 表` 及 `cmd 表`。
  */
 
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
 #include <string.h>
 #include <stdlib.h>
-#if __USE_STM32__
+
+/* ========================================================================
+ *  共享常量
+ * ======================================================================== */
 
 #define KEY_PRESS     0
 #define KEY_RELEASE   1
@@ -145,6 +67,10 @@
 #define EV_QUEUE_SIZE 16
 
 #define EV_PACK(key, type) ((1U << 31) | ((uint32_t)(key) << 4) | (uint32_t)(type))
+
+/* ========================================================================
+ *  共享类型
+ * ======================================================================== */
 
 typedef struct {
     uint32_t ev_buf[EV_QUEUE_SIZE];
@@ -171,6 +97,10 @@ typedef struct {
     uint32_t rd_val;
 } btn16_data_t;
 
+/* ========================================================================
+ *  共享 — 事件队列
+ * ======================================================================== */
+
 static void ev_push(btn16_cpx_t* c, uint32_t ev)
 {
     if (c->ev_count < EV_QUEUE_SIZE) {
@@ -189,6 +119,14 @@ static uint32_t ev_pop(btn16_cpx_t* c)
     return ev;
 }
 
+/* ========================================================================
+ *  STM32 平台 — 键扫描
+ * ======================================================================== */
+
+#if __USE_STM32__
+
+#include "stm32f1xx.h"
+
 static uint32_t keypad_scan(app_t* gpio)
 {
     uint32_t raw = 0;
@@ -202,11 +140,56 @@ static uint32_t keypad_scan(app_t* gpio)
     return raw;
 }
 
+/* ========================================================================
+ *  PC 平台 — 键扫描
+ * ======================================================================== */
+
+#elif __USE_PC__
+
+/*   0:'1'=quit  1:'2'  2:'3'  3:'4'
+ *   4:'Q'  5:'W'  6:'E'=up  7:'R'
+ *   8:'A'  9:'S'=left 10:'D'=OK 11:'F'=right
+ *  12:'Z' 13:'X' 14:'C'=down 15:'V'
+ *
+ *  2-indexed: 在 PC 上模拟 STM32 官方布局, 键位索引 = pc_key_map[i]
+ */
+static const int pc_key_map[16] = {
+    '1', '2', '3', '4',
+    'Q', 'W', 'E', 'R',
+    'A', 'S', 'D', 'F',
+    'Z', 'X', 'C', 'V'
+};
+
+static uint32_t keypad_scan(app_t* gpio)
+{
+    (void)gpio;
+    /* ensure message queue exists for GetAsyncKeyState */
+    static int msgq_init = 0;
+    if (!msgq_init) {
+        MSG msg;
+        PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
+        msgq_init = 1;
+    }
+    uint32_t raw = 0;
+    for (int i = 0; i < 16; i++)
+        if (GetAsyncKeyState(pc_key_map[i]) & 0x8000)
+            raw |= (1U << i);
+    return raw;
+}
+
+#endif
+
+/* ========================================================================
+ *  共享 — 定时器扫描回调 (复杂模式 + 简单模式)
+ * ======================================================================== */
+
 static void* scan_cb(void* data)
 {
     app_t* app = (app_t*)data;
     btn16_data_t* d = (btn16_data_t*)app->app_data;
+#if __USE_STM32__
     if (!d->hw_inited) return NULL;
+#endif
 
     uint32_t raw = keypad_scan(app->app0);
 
@@ -249,6 +232,10 @@ static void* scan_cb(void* data)
 
             if (c->states[i] == STATE_HOLD) {
                 c->down_ticks[i]++;
+                if (c->down_ticks[i] - c->hold_ticks >= c->hold_gap) {
+                    c->down_ticks[i] = c->hold_ticks;
+                    ev_push(c, EV_PACK(i, KEY_HOLD));
+                }
                 if (c->down_ticks[i] >= LONG_TICKS && !(c->flags[i] & 1)) {
                     c->flags[i] |= 1;
                     ev_push(c, EV_PACK(i, KEY_LONG));
@@ -267,16 +254,17 @@ static void* scan_cb(void* data)
     return NULL;
 }
 
+/* ========================================================================
+ *  共享 — App 生命周期
+ * ======================================================================== */
+
 static int btn16_open(app_t* app)
 {
-    btn16_data_t* d = osmalloc(sizeof(btn16_data_t));
+    btn16_data_t* d = (btn16_data_t*)osmalloc(sizeof(btn16_data_t));
     if (!d) return -1;
-    d->interval_ms   = 0;
-    d->hw_inited     = 0;
-    d->timer_started = 0;
-    d->complex_mode  = 1;
-    d->latest_keys   = 0;
-    d->cpx = osmalloc(sizeof(btn16_cpx_t));
+    memset(d, 0, sizeof(btn16_data_t));
+    d->complex_mode = 1;
+    d->cpx = (btn16_cpx_t*)osmalloc(sizeof(btn16_cpx_t));
     if (d->cpx) {
         memset(d->cpx, 0, sizeof(btn16_cpx_t));
         d->cpx->hold_ticks = HOLD_TICKS_DEF;
@@ -300,6 +288,10 @@ static int btn16_close(app_t* app)
     return 0;
 }
 
+/* ========================================================================
+ *  共享 — appread
+ * ======================================================================== */
+
 static int btn16_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     (void)count;
@@ -321,10 +313,16 @@ static int btn16_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     return 0;
 }
 
+/* ========================================================================
+ *  共享 — appwrite (mode=1 需平台 #if)
+ * ======================================================================== */
+
 static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     btn16_data_t* d = (btn16_data_t*)app->app_data;
+
     if (mode == 1 && !d->hw_inited) {
+#if __USE_STM32__
         if (app->app0) appopen(app->app0);
         for (int p = 0; p < 8; p++) {
             uint32_t nib = (p < 4) ? 0x3 : 0x8;
@@ -333,12 +331,14 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         uint32_t zero = 0;
         appwrite(app->app0, &zero, 0x00FF, 3);
         kscprintf("button16: gpio_port init done, PORTA pins 0-7\r\n");
+#endif
         uint32_t raw = keypad_scan(app->app0);
         d->latest_keys = raw;
         if (d->cpx) d->cpx->prev_raw = raw;
         d->hw_inited = 1;
         return 1;
     }
+
     if (mode == 2 && !d->timer_started && data && count == 1) {
         d->interval_ms = *(uint32_t*)data;
         app_t* tim = appget("tim_clock");
@@ -350,14 +350,15 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         d->timer_started = 1;
         return 1;
     }
+
     if (mode == 4 && data && count == 1) {
         uint32_t enable = *(uint32_t*)data;
         if (enable && !d->complex_mode) {
-            d->cpx = osmalloc(sizeof(btn16_cpx_t));
+            d->cpx = (btn16_cpx_t*)osmalloc(sizeof(btn16_cpx_t));
             if (d->cpx) {
                 memset(d->cpx, 0, sizeof(btn16_cpx_t));
                 d->complex_mode = 1;
-    uint32_t raw = keypad_scan(app->app0);
+                uint32_t raw = keypad_scan(app->app0);
                 d->latest_keys = raw;
                 d->cpx->prev_raw = raw;
             }
@@ -368,19 +369,26 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         }
         return 1;
     }
+
     if (mode == 5 && data && d->complex_mode && d->cpx) {
         if (count >= 1) d->cpx->hold_ticks = (uint8_t)((uint32_t*)data)[0];
         if (count >= 2) d->cpx->hold_gap   = (uint8_t)((uint32_t*)data)[1];
         return 1;
     }
+
     return 0;
 }
+
+/* ========================================================================
+ *  共享 — cmd 处理 (cmd_init 需平台 #if)
+ * ======================================================================== */
 
 static int cmd_init(app_t* app, const char** argv)
 {
     (void)argv;
     btn16_data_t* d = (btn16_data_t*)app->app_data;
     if (!app || !d || d->hw_inited) return -1;
+#if __USE_STM32__
     if (app->app0) appopen(app->app0);
     for (int p = 0; p < 8; p++) {
         uint32_t nib = (p < 4) ? 0x3 : 0x8;
@@ -388,6 +396,7 @@ static int cmd_init(app_t* app, const char** argv)
     }
     uint32_t zero = 0;
     appwrite(app->app0, &zero, 0x00FF, 3);
+#endif
     uint32_t raw = keypad_scan(app->app0);
     d->latest_keys = raw;
     if (d->cpx) d->cpx->prev_raw = raw;
@@ -431,7 +440,7 @@ static int cmd_cpx(app_t* app, const char** argv)
     if (!app || !d || !APPCMD_HAS(argv, 'e')) return -1;
     uint32_t en = strtoul(argv[APPCMD_ARG('e')], NULL, 0);
     if (en && !d->complex_mode) {
-        d->cpx = osmalloc(sizeof(btn16_cpx_t));
+        d->cpx = (btn16_cpx_t*)osmalloc(sizeof(btn16_cpx_t));
         if (d->cpx) {
             memset(d->cpx, 0, sizeof(btn16_cpx_t));
             d->complex_mode = 1;
@@ -512,7 +521,10 @@ static const papp_ops_t btn16_ops = {
     .cmd   = btn16_app_cmd,
 };
 
+#if __USE_STM32__
 REGISTER_APP_EX("button16", "0", "1\0gpio_port",
                 &btn16_ops, "4x4 matrix keypad scanner");
-
+#elif __USE_PC__
+REGISTER_APP_EX("button16", "0", "0",
+                &btn16_ops, "4x4 matrix keypad scanner (PC: GetAsyncKeyState)");
 #endif

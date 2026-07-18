@@ -638,14 +638,14 @@ static uint32_t color16to24(uint16_t color16)
     return (b8 << 16) | (g8 << 8) | r8;
 }
 
-#define SCALE 3
+#define SCALE KSC_PC_SCALE
 void screen_init(void* data)
 {
     (void)data;
-    initgraph(TFTx*SCALE,TFTy*SCALE);
+    initgraph(TFTx*SCALE, 320*SCALE);
     setlinecolor(BLACK);
     HWND hwnd = GetHWnd();
-    MoveWindow(hwnd, 300, 100,TFTx*SCALE,TFTy*SCALE+10*SCALE, TRUE);
+    SetWindowPos(hwnd, NULL, 200, 50, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 }
 static uint16_t sSx,sSy,sEx,sEy,sCx,sCy;
 void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
@@ -666,7 +666,6 @@ void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
     (void)data;
     while(num--){
         KSCCOLOR ncolor = *color++;
-        ncolor = (ncolor)>>8| (ncolor<<8);
         setfillcolor(color16to24(ncolor));
         solidrectangle(sCx*SCALE,sCy*SCALE,sCx*SCALE+SCALE,sCy*SCALE+SCALE);
         movecursor();

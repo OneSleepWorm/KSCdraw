@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#if __USE_STM32__
+#if __USE_STM32__ || __USE_PC__
 
 #define LINE_BUF_SIZE   80
 
@@ -24,11 +24,11 @@ static void term_help(app_t* app)
 {
     term_ctx_t* ctx = (term_ctx_t*)app->app_data;
     term_console_puts(ctx->console, "apps:\r\n");
-    size_t app_count = ((const char*)__stop_papp_table - (const char*)__start_papp_table)
+    size_t app_count = ((const char*)__stop_app_table - (const char*)__start_app_table)
                        / sizeof(papp_t);
     char buf[24];
     for (size_t i = 0; i < app_count; i++) {
-        const papp_t* p = &__start_papp_table[i];
+        const papp_t* p = &__start_app_table[i];
         if (p->base && p->base->app_name) {
             int n = snprintf(buf, sizeof(buf), "  %s\r\n", p->base->app_name);
             if (n > 0) term_console_puts(ctx->console, buf);

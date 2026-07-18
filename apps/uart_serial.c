@@ -423,4 +423,76 @@ void USART1_IRQHandler(void) { uart_irq_handler(0); }
 void USART2_IRQHandler(void) { uart_irq_handler(1); }
 void USART3_IRQHandler(void) { uart_irq_handler(2); }
 
-#endif
+#elif __USE_PC__
+
+#include <stdio.h>
+#include <conio.h>
+
+static int pc_uart_open(app_t* app)
+{
+    (void)app;
+    setvbuf(stdout, NULL, _IONBF, 0);
+    return 0;
+}
+
+static int pc_uart_close(app_t* app)
+{
+    (void)app;
+    return 0;
+}
+
+static int pc_uart_write(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    (void)app;
+    uint32_t op = mode & 0x0F;
+    if (op == 0x01 || op == 0x11) {
+        if (data && count > 0)
+            fwrite(data, 1, count, stdout);
+        return (int)count;
+    }
+    if (op == 0x04) return 1;
+    return -1;
+}
+
+static int pc_uart_read(app_t* app, void* data, uint32_t count, uint32_t mode)
+{
+    (void)app;
+    if (!data || count == 0) return 0;
+    if (mode & 0x40) {
+        ((uint8_t*)data)[0] = (uint8_t)_getch();
+        return 1;
+    }
+    if (!_kbhit()) return 0;
+    ((uint8_t*)data)[0] = (uint8_t)_getch();
+    return 1;
+}
+
+static int pc_uart_cmd(app_t* app, const char* cmdname, const char** argv)
+{
+    (void)app;
+    if (strcmp(cmdname, "print") == 0) {
+        const char* msg = APPCMD_HAS(argv, 'm') ? argv[APPCMD_ARG('m')] : "";
+        printf("%s\n", msg);
+        return 0;
+    }
+    if (strcmp(cmdname, "clear") == 0) {
+        printf("\033[2J\033[H");
+        return 0;
+    }
+    if (strcmp(cmdname, "open") == 0 || strcmp(cmdname, "close") == 0)
+        return 1;
+    return -1;
+}
+
+static const papp_ops_t pc_uart_ops = {
+    .open  = pc_uart_open,
+    .close = pc_uart_close,
+    .read  = pc_uart_read,
+    .write = pc_uart_write,
+    .cmd   = pc_uart_cmd,
+};
+
+REGISTER_APP_EX("uart_serial", "0", "0", &pc_uart_ops,
+    "PC console via stdin/stdout");
+
+#endif /* __USE_STM32__ / __USE_PC__ */

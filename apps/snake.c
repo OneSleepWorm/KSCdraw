@@ -52,8 +52,6 @@
 #include <string.h>
 #include <stdio.h>
 
-#if __USE_STM32__
-
 /* ── 游戏常量 ── */
 
 #define COLS        24
@@ -196,7 +194,7 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_GAMEOVER].width   = 120;
     ctx->objs[OBJ_GAMEOVER].height  = 10;
     ctx->objs[OBJ_GAMEOVER].colorck = 0xF800;
-    ctx->objs[OBJ_GAMEOVER].data    = "GAME OVER";
+    ctx->objs[OBJ_GAMEOVER].data    = (void*)"GAME OVER";
     ctx->objs[OBJ_GAMEOVER]._type   = _string;
 
     ctx->objs[OBJ_PAUSE].sdx     = 60;
@@ -204,7 +202,7 @@ static void init_objects(snake_ctx_t* ctx)
     ctx->objs[OBJ_PAUSE].width   = 120;
     ctx->objs[OBJ_PAUSE].height  = 10;
     ctx->objs[OBJ_PAUSE].colorck = 0xFFFF;
-    ctx->objs[OBJ_PAUSE].data    = "PAUSED";
+    ctx->objs[OBJ_PAUSE].data    = (void*)"PAUSED";
     ctx->objs[OBJ_PAUSE]._type   = _string;
 
     ctx->objs[OBJ_ERASE].width   = CS;
@@ -423,9 +421,13 @@ static int snake_init(app_t* app, int mode)
     ctx->running   = 1;
 
     if (mode == 1) {
-        /* 阻塞模式: WFI 等待 K0 退出 */
+        /* 阻塞模式: 等待 K0 退出 */
         while (ctx->running) {
+#if __USE_STM32__
             __asm volatile("wfi");
+#elif __USE_PC__
+            Sleep(100);
+#endif
         }
     }
     /* mode=2 (中断模式): 直接返回, 游戏在 TIM4 ISR 中运行 */
@@ -460,11 +462,10 @@ static const papp_ops_t snake_ops = {
     .open   = snake_open,
     .close  = snake_close,
     .read   = snake_read,
+    .write  = NULL,
     .cmd    = snake_cmd,
 };
 
 /* dep: none (tim_clock managed internally), app_dep: KSCGUI(app0), button16(app1) */
 REGISTER_APP_EX("snake", "0", "2\0KSCGUI\0button16",
                 &snake_ops, "Snake Game (interrupt-driven, incremental)");
-
-#endif

@@ -16,10 +16,9 @@ KSCOS 是一个跨平台、轻量级、**非 RTOS 式**的应用框架，面向 
 KSCOS/
 ├── inc/                # 公共头文件
 │   ├── app.h            # App 框架 (papp_t / app_t / REGISTER_APP / appcmd)
-│   ├── KSCOSsystem.h    # 系统服务 (sys_init / osmalloc / kscprintf)
+│   ├── KSCOSsystem.h    # 系统服务 (sys_init / osmalloc / kscprintf / ksc_console)
 │   ├── KSCdraw.h        # 图形引擎 (k_draw_device / KSC_window / ksc_obj_t)
 │   ├── KSCconfig.h      # 平台开关 + 颜色宏 + 屏幕配置
-│   ├── application.h    # (遗留) ksc_app 简单注册接口
 │   ├── KSCfont.h        # 字体数据接口
 │   ├── KSCimg.h         # 图像数据接口
 │   ├── UTF8_FlashN.h
@@ -38,13 +37,13 @@ KSCOS/
 │   ├── button16.c       # 4×4 矩阵键盘
 │   ├── super_spi.c      # 统一 SPI1+SPI2 主控
 │   ├── kscgui.c         # GUI Tile 合成器 + ST7789
-│   ├── list.c           # GUI 列表 widget
-│   ├── ctrl_list.c      # 方向键列表控制
+│   ├── list.c           # GUI 列表 widget (含内置键盘控制)
 │   ├── snake.c          # Snake 游戏 (中断驱动)
 │   ├── w25qxx_base.c    # W25Q64 SPI NOR Flash
 │   ├── littlefs_fs.c    # littlefs on W25Q64
 │   ├── terminal.c       # 字符串路由分发器
-│   └── open.c           # 按扩展名路由文件打开
+│   ├── open.c           # 按扩展名路由文件打开
+│   └── upload.c         # (未完成) PC ↔ 板端文件传输
 ├── third_party/
 │   ├── easyx/           # 仅 PC: 静态库 libeasyx.a + graphics.h
 │   ├── littlefs/        # littlefs 源 (lfs.c / lfs_util.c / lfs_config.h)
@@ -53,7 +52,7 @@ KSCOS/
 ├── examples/           # 早期独立 App 示例 (basicdraw/terminal_demo/...)
 ├── docs/
 │   └── KSCGUI_API.md   # KSCGUI 详细命令参考
-├── master.c            # (遗留) PC 侧 demo main, 仅 PC 构建目标编译
+├── master.c            # PC 入口 (gitignored, 本地开发者替换为自己的 main)
 ├── CMakeLists.txt      # KSCOS 子项目顶层 (PC 调试构建)
 ├── CMakePresets.json   # MinGW Makefiles / Ninja 预设
 └── LICENSE             # MIT, © 2026 OneSleepWorm
@@ -305,7 +304,7 @@ appwrite(spi, (void*)frame, 1024, SSPI_MODE(1, tft1, SSPI_SEND_DAT_DMA));
 
 | API | 说明 |
 |-----|------|
-| `sys_init()` | STM32: 使能 AFIO+SWJ 重映射 → `pll_init()` (HSE×9=72MHz) → `SysTick_Config` → `appget("uart_serial")` + `appopen` + `appcmd "open -i 1"` → 设 `ksc_console`。PC: 空操作 (无操作), `ksc_console` = NULL, `kscprintf` 直接走 `printf` |
+| `sys_init()` | STM32: 使能 AFIO+SWJ 重映射 → `pll_init()` (HSE×9=72MHz) → `SysTick_Config` → `appget("uart_serial")` + `appopen` + `appcmd "open -i 1"` → 设 `ksc_console`。PC: 同流程 (`appget("uart_serial")` → `appopen` → `appcmd "open -i 1"`), `ksc_console` 指向 uart_serial stdout |
 | `sysdelay(ms)` | 基于 `sys_tick_ms` 阻塞延时 |
 | `sysgettime()` | 返回 `sys_tick_ms` (开机毫秒计数) |
 | `osmalloc(size)` / `osfree(p)` / `oscalloc(n,sz)` | 框架内统一堆接口, STM32 上为 libc `malloc/calloc/free` |
@@ -415,26 +414,25 @@ typedef struct ksc_obj_t {
 | 注册名 | app_dep | 平台 | 说明 | 源文件 |
 |--------|---------|------|------|--------|
 | `gpio_port` | — | STM32 | 全局引脚号直操寄存器 (CR/BSRR/IDR/ODR), 内含 RCC 懒初始化 | `gpio_port.c` |
-| `uart_serial` | `gpio_port` | STM32 | 统一 USART1/2/3, 中断 RX 环形缓冲 + 回调; mode=`(inst<<4)\|op` | `uart_serial.c` |
-| `tim_clock` | — | STM32 | TIM1-4 周期 / 单次; 回调注入 | `tim_clock.c` |
-| `button16` | `gpio_port` | STM32 | 4×4 矩阵键盘扫描; raw 位图 + 事件队列 (PRESS/RELEASE/HOLD/LONG/DBLCLICK) | `button16.c` |
+| `uart_serial` | `gpio_port` | PC+STM32 | 统一 USART1/2/3, 中断 RX 环形缓冲 + 回调; mode=`(inst<<4)\|op` | `uart_serial.c` |
+| `tim_clock` | — | PC+STM32 | TIM1-4 周期 / 单次; 回调注入 (PC: 后台线程) | `tim_clock.c` |
+| `button16` | `gpio_port` | PC+STM32 | 4×4 矩阵键盘扫描; raw 位图 + 事件队列 (PRESS/RELEASE/HOLD/LONG/DBLCLICK) | `button16.c` |
 | `super_spi` | `gpio_port` | STM32 | 统一 SPI1+SPI2 主控, 含 CS/DC/R1/R2 逻辑引脚 + DMA; `SSPI_MODE(i,d,op)` 编码 mode, `SSPI_XFER_INST(i)` 双工 | `super_spi.c` |
-| `KSCGUI` | `super_spi` | STM32 | GUI Tile 合成器 (16 槽 + Z 序) + ST7789 驱动, ~30 个 appcmd 命令 | `kscgui.c` (详见 `docs/KSCGUI_API.md`) |
-| `list` | `KSCGUI` | STM32 | GUI 列表 widget, 256B 字符串池 + 碎片管理 + 5 种选中样式 | `list.c` |
-| `ctrl_list` | `list` + `button16` | STM32 | 方向键列表控件, 由 `button16` 事件 + `tim_clock` 轮询驱动选中变化, 上抛 `CONFIRM`/`QUIT` 事件 | `ctrl_list.c` |
-| `snake` | `KSCGUI` + `button16` | STM32 | Snake 游戏, 全中断驱动 (TIM4@250ms), 对象增量渲染 | `snake.c` |
-| `w25qxx_base` | `super_spi` | STM32 | W25Q64 SPI NOR Flash: id/sr/uid/read/fast/write/erase/ce | `w25qxx_base.c` |
-| `littlefs` | `w25qxx_base` | STM32 | littlefs 文件系统: 一次性 (`writenew`/`append`/`cat`/`ls`/`rm`/`mkdir`/`mv`/`stat`) + 持久 fd (`open`/`close`/`fread`/`fwrite`/`fseek`) | `littlefs_fs.c` |
-| `terminal` | — | STM32 | 字符串路由分发器: UART RX → 攒行 → 按 `appname subcmd -x v` 路由到 `appget` 目标; 内建 `help`/`echo` | `terminal.c` |
-| `open` | `littlefs` | STM32 | 按扩展名路由文件打开 (`.txt` → uart, `.bmp` → gui) | `open.c` |
-| `upload` | `littlefs` | STM32 | （未完成）PC ↔ 板端文件传输 | `upload.c` |
+| `KSCGUI` | `super_spi` | PC+STM32 | GUI Tile 合成器 (16 槽 + Z 序) + ST7789 驱动 (PC: EasyX), ~30 个 appcmd 命令 | `kscgui.c` (详见 `docs/KSCGUI_API.md`) |
+| `list` | `KSCGUI` | PC+STM32 | GUI 列表 widget, 256B 字符串池 + 碎片管理 + 5 种选中样式; 内置键盘控制 | `list.c` |
+| `snake` | `KSCGUI` + `button16` | PC+STM32 | Snake 游戏, 全中断驱动 (TIM4@250ms), 对象增量渲染 | `snake.c` |
+| `w25qxx_base` | `super_spi` | PC+STM32 | W25Q64 SPI NOR Flash: id/sr/uid/read/fast/write/erase/ce (PC: 文件模拟) | `w25qxx_base.c` |
+| `littlefs` | `w25qxx_base` | PC+STM32 | littlefs 文件系统: 一次性 (`writenew`/`append`/`cat`/`ls`/`rm`/`mkdir`/`mv`/`stat`) + 持久 fd (`open`/`close`/`fread`/`fwrite`/`fseek`) | `littlefs_fs.c` |
+| `terminal` | — | PC+STM32 | 字符串路由分发器: UART RX → 攒行 → 按 `appname subcmd -x v` 路由到 `appget` 目标; 内建 `help`/`echo` | `terminal.c` |
+| `open` | `littlefs` | PC+STM32 | 按扩展名路由文件打开 (`.txt` → uart, `.bmp` → gui) | `open.c` |
+| `upload` | `littlefs` | STM32(未完成) | PC ↔ 板端文件传输 | `upload.c` |
 
 跨 App 共享类型 (常量 / 结构) 定义在 `apps/app_config.h`:
 - `SSPI_MODE(spi_inst, dev_id, op)` / `SSPI_XFER_INST(i)` — super_spi mode 编码宏
 - `spi_xfer_t` — 全双工收发结构
 - `tile_h_t` / `tile_info_t` — KSCGUI tile 句柄 (uint8 4-bit 生成 + 4-bit 槽位)
 - `list_pos_t` / `list_colors_t` / `LIST_STYLE_*` — list widget
-- `ctrl_keymap_t` / `ctrl_event_cb_t` / `CTRL_EVENT_CONFIRM` / `CTRL_EVENT_QUIT` — ctrl_list
+- `ctrl_keymap_t` / `ctrl_event_cb_t` / `CTRL_EVENT_CONFIRM` / `CTRL_EVENT_QUIT` — list 键盘控制
 
 ---
 

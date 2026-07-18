@@ -108,19 +108,12 @@
 #include "app_config.h"
 #include <stdio.h>
 #include <string.h>
-#if __USE_STM32__
+#if __USE_STM32__ || __USE_PC__
 
 /* ── littlefs 配置 ──
  * LFS_READONLY 由 CMakeLists.txt 的 option() 控制 (默认 OFF), 
  * 不在源文件中定义, 否则 #ifndef LFS_READONLY 检查会失效.
  */
-
-#ifndef LFS_NO_ASSERT
-#define LFS_NO_ASSERT
-#endif
-#define LFS_NO_DEBUG
-#define LFS_NO_WARN
-#define LFS_NO_ERROR
 
 /* ---- 底层块设备接口 (委托到 w25qxx_base) ---- */
 
@@ -176,7 +169,7 @@ static int lfs_bd_sync(const struct lfs_config *c)
 
 static int lfs_app_open(app_t* app)
 {
-    lfs_ctx_t* ctx = osmalloc(sizeof(lfs_ctx_t));
+    lfs_ctx_t* ctx = (lfs_ctx_t*)osmalloc(sizeof(lfs_ctx_t));
     if (!ctx) return -1;
     ctx->flash = app->app0;
     ctx->mounted = 0;
@@ -187,9 +180,9 @@ static int lfs_app_open(app_t* app)
     int ret = appopen(ctx->flash);
     if (ret) { osfree(ctx); return ret; }
 
-    ctx->read_buf = osmalloc(512);
-    ctx->prog_buf = osmalloc(512);
-    ctx->lookahead_buf = osmalloc(256);
+    ctx->read_buf = (uint8_t*)osmalloc(512);
+    ctx->prog_buf = (uint8_t*)osmalloc(512);
+    ctx->lookahead_buf = (uint8_t*)osmalloc(256);
     if (!ctx->read_buf || !ctx->prog_buf || !ctx->lookahead_buf) {
         if (ctx->read_buf) osfree(ctx->read_buf);
         if (ctx->prog_buf) osfree(ctx->prog_buf);
@@ -1164,8 +1157,8 @@ static int lfs_cmd(app_t* app, const char* cmdname, const char** argv)
 static const papp_ops_t lfs_app_ops = {
     .open  = lfs_app_open,
     .close = lfs_app_close,
-    .write = lfs_app_write,
     .read  = lfs_app_read,
+    .write = lfs_app_write,
     .cmd   = lfs_cmd,
 };
 

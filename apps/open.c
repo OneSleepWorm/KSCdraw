@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#if __USE_STM32__
+#if __USE_STM32__ || __USE_PC__
 
 typedef struct {
     const char* ext;
