@@ -87,6 +87,8 @@ app_t* appget(const char* name)
         app->app3        = NULL;
         app->app_ops     = papp->ops;
         app->callback    = CALLBACK_NULL_FUNC;
+        app->output_fn   = NULL;
+        app->output_ctx  = NULL;
         app->app_data    = NULL;
         app->user_data   = NULL;
         app->callback_data = NULL;
@@ -192,13 +194,37 @@ int appcmd(app_t* app, const char* cmdline)
                 break;
             }
             if (!(*p == '-' && (p[1] >= 'a' && p[1] <= 'z'))) {
-                argv[idx] = p;
                 if (*p == '"') {
+                    p++;
+                    argv[idx] = p;
+                    char* dst = (char*)argv[idx];
+                    while (*p && *p != '"') {
+                        if (*p == '\\') {
+                            p++;
+                            switch (*p) {
+                                case '"':  *dst++ = '"'; break;
+                                case '\\': *dst++ = '\\'; break;
+                                case 'n':  *dst++ = '\n'; break;
+                                case 'r':  *dst++ = '\r'; break;
+                                case 't':  *dst++ = '\t'; break;
+                                case '0':  *dst++ = '\0'; break;
+                                default:   *dst++ = '\\'; *dst++ = *p; break;
+                            }
+                            if (*p) p++;
+                        } else {
+                            *dst++ = *p++;
+                        }
+                    }
+                    if (*p == '"') p++;
+                    *dst = '\0';
+                } else if (*p == '\'') {
                     argv[idx] = ++p;
-                    while (*p && *p != '"') p++;
-                    if (*p == '"') *p++ = '\0';
+                    while (*p && *p != '\'') p++;
+                    if (*p == '\'') *p++ = '\0';
+                } else {
+                    argv[idx] = p;
+                    while (*p && *p != ' ') p++;
                 }
-                while (*p && *p != ' ') p++;
             } else {
                 argv[idx] = "";
             }
@@ -207,6 +233,12 @@ int appcmd(app_t* app, const char* cmdline)
         }
     }
 
+    return app->app_ops->cmd(app, cmdname, argv);
+}
+
+int appcmd_argv(app_t* app, const char* cmdname, const char** argv)
+{
+    if (!app || !app->app_ops || !app->app_ops->cmd) return -1;
     return app->app_ops->cmd(app, cmdname, argv);
 }
 

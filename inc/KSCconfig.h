@@ -47,7 +47,7 @@ typedef uint16_t ku16;
 typedef int8_t ki8;
 typedef int16_t ki16;
 //data config
-#define SYSTEMFONT 7
+#define SYSTEMFONT 8
 #define SYSTEMCHINESEFONT 16
 
 #define SYSTEMCOLOR0 0xFFFF

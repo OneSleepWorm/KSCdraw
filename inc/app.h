@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 typedef void* (*void_func_t)(void*);
+typedef int (*app_output_fn)(const void* data, uint32_t len, void* ctx);
 
 struct app_t;
 
@@ -43,6 +44,8 @@ typedef struct app_t {
     struct app_t*       app3;
     const papp_ops_t*   app_ops;
     void_func_t         callback;
+    app_output_fn       output_fn;
+    void*               output_ctx;
     void*               app_data;
     void*               user_data;
     void*               callback_data;
@@ -70,5 +73,6 @@ int    appclose(app_t* app);
 int    appread(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appwrite(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appcmd(app_t* app, const char* cmdline);
+int    appcmd_argv(app_t* app, const char* cmdname, const char** argv);
 
 #endif

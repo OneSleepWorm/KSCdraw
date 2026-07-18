@@ -17,13 +17,11 @@
  *   3. 烧录后打开串口(115200)观察
  *
  *   预期 UART 输出:
- *     terminal ready
  *     apps:
  *       gpio_port
  *       uart_serial
  *       ...
  *     hello world
- *     gpio_port: 0
  *     ...
  *
  *   串口交互 (烧录后可打字):
@@ -36,7 +34,8 @@
  * ============================================================
  *   appwrite(term, data, len, 0)   — raw bytes 流 (攒行)
  *   appwrite(term, data, len, 1)   — 完整命令 (直接路由)
- *   app->callback(str)             — 输出回调 (默认→ksc_console)
+ *   输出类命令通过 output_fn 自动回显到控制台
+ *   (或通过 term->user_data 捕获数据到调用方缓冲)
  *
  *   命令格式:  appname subcmd -x val -y val
  *   内建:      help, echo

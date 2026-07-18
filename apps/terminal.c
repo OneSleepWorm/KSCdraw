@@ -36,6 +36,12 @@ static void term_help(app_t* app)
     }
 }
 
+static int term_echo(const void* data, uint32_t len, void* ctx)
+{
+    if (!data || !len || !ctx) return -1;
+    return appwrite((app_t*)ctx, (void*)data, len, 0x11);
+}
+
 static int term_dispatch(app_t* app, const char* cmdline)
 {
     term_ctx_t* ctx = (term_ctx_t*)app->app_data;
@@ -77,10 +83,24 @@ static int term_dispatch(app_t* app, const char* cmdline)
 
     int r;
     if (*rest) {
-        void* saved = target->user_data;
-        target->user_data = app->user_data;
+        void* saved_ud = target->user_data;
+        app_output_fn saved_ofn = target->output_fn;
+        void* saved_octx = target->output_ctx;
+
+        if (app->user_data) {
+            target->user_data = app->user_data;
+            target->output_fn = NULL;
+        } else {
+            target->user_data = NULL;
+            target->output_fn = term_echo;
+            target->output_ctx = ctx->console;
+        }
+
         r = appcmd(target, rest);
-        target->user_data = saved;
+
+        target->user_data = saved_ud;
+        target->output_fn = saved_ofn;
+        target->output_ctx = saved_octx;
     } else {
         r = 0;
     }

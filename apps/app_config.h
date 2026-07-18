@@ -103,4 +103,16 @@ typedef struct {
     uint8_t quit;
 } ctrl_keymap_t;
 
+/* ================================================================
+ * upload — binary upload state
+ * ================================================================ */
+
+typedef struct upload_ctx_t {
+    struct app_t*   lfs;
+    uint8_t         chunk[256];
+    uint32_t        chunk_len;
+    uint32_t        remaining;
+    int             active;
+} upload_ctx_t;
+
 #endif

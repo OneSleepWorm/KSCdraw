@@ -35,6 +35,7 @@
  * appclose(fs)
  *   卸载 FS, 关闭 w25qxx_base, 释放全部内存.
  *
+ *
  * appwrite(fs, data, count, mode)
  *   0  — no-op (通用约定)
  *   1  — 格式化. data=NULL, 调用 lfs_format. (RONLY 不可用)
@@ -109,6 +110,20 @@
 #include <string.h>
 #if __USE_STM32__
 
+/* ── littlefs 配置 ──
+ * LFS_READONLY 由 CMakeLists.txt 的 option() 控制 (默认 OFF), 
+ * 不在源文件中定义, 否则 #ifndef LFS_READONLY 检查会失效.
+ */
+
+#ifndef LFS_NO_ASSERT
+#define LFS_NO_ASSERT
+#endif
+#define LFS_NO_DEBUG
+#define LFS_NO_WARN
+#define LFS_NO_ERROR
+
+/* ---- 底层块设备接口 (委托到 w25qxx_base) ---- */
+
 typedef struct {
     app_t* flash;
     lfs_t  lfs;
@@ -117,6 +132,9 @@ typedef struct {
     uint8_t* prog_buf;
     uint8_t* lookahead_buf;
     int mounted;
+    char cwd[64];
+    lfs_file_t* current;
+    uint8_t user_level;
 } lfs_ctx_t;
 
 static int lfs_bd_read(const struct lfs_config *c, lfs_block_t block,
@@ -200,6 +218,11 @@ static int lfs_app_open(app_t* app)
         .lookahead_buffer = ctx->lookahead_buf,
     };
 
+    ctx->cwd[0] = '/'; ctx->cwd[1] = 'h'; ctx->cwd[2] = 'o'; ctx->cwd[3] = 'm';
+    ctx->cwd[4] = 'e'; ctx->cwd[5] = 0;
+    ctx->current = 0;
+    ctx->user_level = 2;
+
     app->app_data = ctx;
     return 0;
 }
@@ -210,6 +233,11 @@ static int lfs_app_close(app_t* app)
     if (!ctx) return 0;
 
     if (ctx->mounted) {
+        if (ctx->current) {
+            lfs_file_close(&ctx->lfs, ctx->current);
+            osfree(ctx->current);
+            ctx->current = NULL;
+        }
         lfs_unmount(&ctx->lfs);
         ctx->mounted = 0;
     }
@@ -221,6 +249,108 @@ static int lfs_app_close(app_t* app)
 
     osfree(ctx);
     app->app_data = NULL;
+    return 0;
+}
+
+/* ── path helpers (cwd resolution + quota) ── */
+
+static void normalize_path(const char* in, char* out, size_t outsz)
+{
+    char tmp[128];
+    char* dst = tmp;
+    const char* src = in;
+    const char* end = tmp + sizeof(tmp) - 1;
+
+    *dst++ = '/';
+    while (*src) {
+        while (*src == '/') src++;
+        if (!*src) break;
+        const char* seg = src;
+        while (*src && *src != '/') src++;
+        int len = (int)(src - seg);
+        if (len == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (dst > tmp + 1) {
+                dst--;
+                while (dst > tmp && *dst != '/') dst--;
+                dst++;
+            }
+        } else if (len == 1 && seg[0] == '.') {
+        } else {
+            if (dst > tmp + 1) *dst++ = '/';
+            if (dst + len > end) len = (int)(end - dst);
+            if (len <= 0) break;
+            memcpy(dst, seg, len);
+            dst += len;
+        }
+    }
+    *dst = 0;
+    size_t slen = (size_t)(dst - tmp);
+    if (slen >= outsz) slen = outsz - 1;
+    memcpy(out, tmp, slen);
+    out[slen] = 0;
+}
+
+static void resolve_path(lfs_ctx_t* ctx, const char* rel, char* abs, size_t absz)
+{
+    if (rel[0] == '/') {
+        normalize_path(rel, abs, absz);
+    } else {
+        char buf[128];
+        int n = snprintf(buf, sizeof(buf), "%s/%s", ctx->cwd, rel);
+        if (n > 0 && n < (int)sizeof(buf))
+            normalize_path(buf, abs, absz);
+        else
+            normalize_path(rel, abs, absz);
+    }
+}
+
+static int check_quota(lfs_ctx_t* ctx, const char* abs_path)
+{
+    struct lfs_info info;
+    int ret = lfs_stat(&ctx->lfs, abs_path, &info);
+    if (ret == 0) return 0;
+
+    const char* last = strrchr(abs_path, '/');
+    if (!last) return 0;
+    int is_hidden = (*(last + 1) == '.');
+    int dlen = (int)(last - abs_path);
+
+    char dir[64];
+    if (dlen == 0) { dir[0] = '/'; dir[1] = 0; }
+    else { memcpy(dir, abs_path, dlen); dir[dlen] = 0; }
+
+    lfs_dir_t ldir;
+    ret = lfs_dir_open(&ctx->lfs, &ldir, dir);
+    if (ret < 0) return 0;
+
+    int hidden_cnt = 0, normal_cnt = 0;
+    while (lfs_dir_read(&ctx->lfs, &ldir, &info) > 0) {
+        if (info.name[0] == '.' && (info.name[1] == 0 || (info.name[1] == '.' && info.name[2] == 0))) continue;
+        if (info.name[0] == '.') hidden_cnt++;
+        else normal_cnt++;
+    }
+    lfs_dir_close(&ctx->lfs, &ldir);
+
+    if (is_hidden) return (hidden_cnt >= 4) ? -12 : 0;
+    return (normal_cnt >= 12) ? -12 : 0;
+}
+
+/* ── permission helpers ── */
+
+#define ROOT_PW "87654321"
+
+static int check_access(lfs_ctx_t* ctx, const char* abs_path, int need_write)
+{
+    int is_system = 0;
+    if (strncmp(abs_path, "/sys", 4) == 0 && (abs_path[4] == '/' || abs_path[4] == 0)) is_system = 1;
+    if (strncmp(abs_path, "/bin", 4) == 0 && (abs_path[4] == '/' || abs_path[4] == 0)) is_system = 1;
+    if (strncmp(abs_path, "/apps", 5) == 0 && (abs_path[5] == '/' || abs_path[5] == 0)) is_system = 1;
+
+    if (need_write) {
+        if (is_system) return (ctx->user_level <= 1) ? 0 : -1;
+        return (ctx->user_level <= 2) ? 0 : -1;
+    }
+    if (is_system) return (ctx->user_level <= 1) ? 0 : -1;
     return 0;
 }
 
@@ -332,8 +462,8 @@ static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     case 11:
         if (!ctx->mounted || !data) return -1;
     {
-        lfs_dir_op_t* dop = (lfs_dir_op_t*)data;
-        ret = lfs_dir_open(&ctx->lfs, dop->dir, dop->path);
+        lfs_dir_op_t* op = (lfs_dir_op_t*)data;
+        ret = lfs_dir_open(&ctx->lfs, op->dir, op->path);
     }
         return ret;
     case 12:
@@ -350,48 +480,40 @@ static int lfs_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
+    if (!data) return -1;
 
     switch (mode) {
     case 0:
         return 0;
-    case 1:
-        if (!data) return -1;
-    {
+    case 1: {
         lfs_rw_t* rw = (lfs_rw_t*)data;
         return (int)lfs_file_read(&ctx->lfs, rw->file, rw->buffer, rw->size);
     }
     case 2:
-        if (!data) return -1;
         return (int)lfs_file_tell(&ctx->lfs, (lfs_file_t*)data);
     case 3:
-        if (!data) return -1;
         return (int)lfs_file_size(&ctx->lfs, (lfs_file_t*)data);
-    case 4:
-        if (!data) return -1;
-    {
+    case 4: {
         lfs_stat_t* st = (lfs_stat_t*)data;
         return lfs_stat(&ctx->lfs, st->path, st->info);
     }
-    case 5:
-        if (!data) return -1;
-    {
-        lfs_dir_read_t* dr = (lfs_dir_read_t*)data;
-        return lfs_dir_read(&ctx->lfs, dr->dir, dr->info);
+    case 5: {
+        lfs_dir_read_t* rd = (lfs_dir_read_t*)data;
+        return lfs_dir_read(&ctx->lfs, rd->dir, rd->info);
     }
     case 6:
-        if (!data) return -1;
         return lfs_fs_stat(&ctx->lfs, (struct lfs_fsinfo*)data);
     default:
         return -1;
     }
 }
 
-/* ================================================================
+/*
  * appcmd 接口
  * ================================================================
- * 所有输出写到 app->user_data (至少 256 B 缓冲)。
- * 字符串数据通过 -d <text>，二进制通过 user_data + -n <len>。
- * 持久文件 handle: open 返回 handle(int), close/fread/fwrite/fseek 用 -h。
+ * 所有输出写到 app->user_data (至少 256 B 缓冲).
+ * 字符串数据通过 -d <text>, 二进制通过 user_data + -n <len>.
+ * 持久文件 handle 由 ctx->current 管理 (单 slot), 不再使用 callback_data/mode_data.
  */
 
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } lfs_cmd_entry_t;
@@ -402,7 +524,9 @@ static int cmd_format(app_t* app, const char** argv)
 {
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || ctx->mounted) return -1;
+    if (!ctx) return -1;
+    if (ctx->user_level != 0) return -1;
+    if (ctx->mounted) return -1;
     return lfs_format(&ctx->lfs, &ctx->cfg);
 }
 
@@ -412,7 +536,14 @@ static int cmd_mount(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || ctx->mounted) return -1;
     int ret = lfs_mount(&ctx->lfs, &ctx->cfg);
-    if (ret == 0) ctx->mounted = 1;
+    if (ret == 0) {
+        ctx->mounted = 1;
+        strcpy(ctx->cwd, "/home");
+        (void)lfs_mkdir(&ctx->lfs, "/sys");
+        (void)lfs_mkdir(&ctx->lfs, "/bin");
+        (void)lfs_mkdir(&ctx->lfs, "/apps");
+        (void)lfs_mkdir(&ctx->lfs, "/home");
+    }
     return ret;
 }
 
@@ -421,6 +552,7 @@ static int cmd_unmount(app_t* app, const char** argv)
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
+    if (ctx->user_level != 0) return -1;
     int ret = lfs_unmount(&ctx->lfs);
     if (ret == 0) ctx->mounted = 0;
     return ret;
@@ -433,9 +565,15 @@ static int cmd_info(app_t* app, const char** argv)
     if (!ctx || !ctx->mounted) return -1;
     struct lfs_fsinfo fi;
     int ret = lfs_fs_stat(&ctx->lfs, &fi);
-    if (ret < 0 || !app->user_data) return ret;
-    snprintf((char*)app->user_data, 256, "blk_size=%u blk_count=%u\r\n",
-             (unsigned)fi.block_size, (unsigned)fi.block_count);
+    if (ret < 0) return ret;
+    if (!app->user_data && !app->output_fn) return -1;
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf), "blk_size=%u blk_count=%u\r\n",
+                     (unsigned)fi.block_size, (unsigned)fi.block_count);
+    if (n > 0) {
+        if (app->user_data) memcpy(app->user_data, buf, (size_t)n + 1);
+        else app->output_fn(buf, n, app->output_ctx);
+    }
     return ret;
 }
 
@@ -444,51 +582,85 @@ static int cmd_info(app_t* app, const char** argv)
 static int cmd_ls(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || !ctx->mounted || !app->user_data) return -1;
-    const char* path = APPCMD_HAS(argv, 'p') ? argv[APPCMD_ARG('p')] : "/";
+    if (!ctx || !ctx->mounted) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
+
+    const char* raw = APPCMD_HAS(argv, 'p') ? argv[APPCMD_ARG('p')] : "";
+    char resolved[64];
+    if (raw[0]) resolve_path(ctx, raw, resolved, sizeof(resolved));
+    else strcpy(resolved, ctx->cwd);
+
+    if (check_access(ctx, resolved, 0) < 0) return -1;
+
     uint16_t max = APPCMD_HAS(argv, 'n') ? (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0) : 256;
 
     lfs_dir_t* dir = (lfs_dir_t*)osmalloc(sizeof(lfs_dir_t));
     if (!dir) return -1;
-    int ret = lfs_dir_open(&ctx->lfs, dir, path);
+    int ret = lfs_dir_open(&ctx->lfs, dir, resolved);
     if (ret < 0) { osfree(dir); return ret; }
 
     struct lfs_info* info = (struct lfs_info*)osmalloc(sizeof(struct lfs_info));
     if (!info) { lfs_dir_close(&ctx->lfs, dir); osfree(dir); return -1; }
 
-    char* out = (char*)app->user_data;
-    int pos = 0;
+    int total = 0; char line[80];
     while (lfs_dir_read(&ctx->lfs, dir, info) > 0) {
-        int n = snprintf(out + pos, max > (uint16_t)pos ? max - (uint16_t)pos : 0,
-                         "%c %s %u\r\n",
+        int n = snprintf(line, sizeof(line), "%c %s %u\r\n",
                          info->type == LFS_TYPE_DIR ? 'D' : 'F',
                          info->name, (unsigned)info->size);
-        if (pos + n >= (int)max) break;
-        pos += n;
+        if (n <= 0) continue;
+        if (app->user_data) {
+            uint16_t rem = max > (uint16_t)total ? max - (uint16_t)total : 0;
+            if (rem == 0) break;
+            int cp = n > (int)rem ? (int)rem : n;
+            memcpy((char*)app->user_data + total, line, (size_t)cp);
+            total += cp;
+        } else {
+            app->output_fn(line, n, app->output_ctx);
+            total += n;
+        }
     }
     lfs_dir_close(&ctx->lfs, dir);
     osfree(info);
     osfree(dir);
-    return pos;
+    return total;
 }
 
 static int cmd_cat(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    if (!APPCMD_HAS(argv, 'p') || !app->user_data) return -1;
+    if (!APPCMD_HAS(argv, 'p')) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 0) < 0) return -1;
+
     uint16_t max = APPCMD_HAS(argv, 'n') ? (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0) : 256;
     if (max == 0) return -1;
 
     lfs_file_t* f = (lfs_file_t*)osmalloc(sizeof(lfs_file_t));
     if (!f) return -1;
-    int ret = lfs_file_open(&ctx->lfs, f, argv[APPCMD_ARG('p')], LFS_O_RDONLY);
+    int ret = lfs_file_open(&ctx->lfs, f, resolved, LFS_O_RDONLY);
     if (ret < 0) { osfree(f); return ret; }
 
-    lfs_size_t rd = lfs_file_read(&ctx->lfs, f, app->user_data, max);
+    lfs_size_t total = 0;
+    if (app->user_data) {
+        lfs_size_t rd = lfs_file_read(&ctx->lfs, f, app->user_data, max);
+        total = rd;
+    } else {
+        uint8_t chunk[64];
+        lfs_size_t rd;
+        while ((rd = lfs_file_read(&ctx->lfs, f, chunk, sizeof(chunk))) > 0) {
+            app->output_fn(chunk, rd, app->output_ctx);
+            total += rd;
+        }
+    }
     lfs_file_close(&ctx->lfs, f);
     osfree(f);
-    return (int)rd;
+    return (int)total;
 }
 
 static int do_write_append(app_t* app, const char** argv, int append_mode)
@@ -496,6 +668,12 @@ static int do_write_append(app_t* app, const char** argv, int append_mode)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 1) < 0) return -1;
 
     const uint8_t* data;
     lfs_size_t len;
@@ -508,12 +686,15 @@ static int do_write_append(app_t* app, const char** argv, int append_mode)
     } else return -1;
     if (len == 0) return -1;
 
+    int q = check_quota(ctx, resolved);
+    if (q < 0) return q;
+
     int flags = LFS_O_WRONLY | LFS_O_CREAT;
     if (!append_mode) flags |= LFS_O_TRUNC;
 
     lfs_file_t* f = (lfs_file_t*)osmalloc(sizeof(lfs_file_t));
     if (!f) return -1;
-    int ret = lfs_file_open(&ctx->lfs, f, argv[APPCMD_ARG('p')], flags);
+    int ret = lfs_file_open(&ctx->lfs, f, resolved, flags);
     if (ret < 0) { osfree(f); return ret; }
 
     if (append_mode) lfs_file_seek(&ctx->lfs, f, 0, LFS_SEEK_END);
@@ -524,21 +705,24 @@ static int do_write_append(app_t* app, const char** argv, int append_mode)
 }
 
 static int cmd_writenew(app_t* app, const char** argv)
-{
-    return do_write_append(app, argv, 0);
-}
+{ return do_write_append(app, argv, 0); }
 
 static int cmd_append(app_t* app, const char** argv)
-{
-    return do_write_append(app, argv, 1);
-}
+{ return do_write_append(app, argv, 1); }
 
 static int cmd_rm(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
-    return lfs_remove(&ctx->lfs, argv[APPCMD_ARG('p')]);
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 1) < 0) return -1;
+
+    return lfs_remove(&ctx->lfs, resolved);
 }
 
 static int cmd_mkdir(app_t* app, const char** argv)
@@ -546,7 +730,17 @@ static int cmd_mkdir(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
-    return lfs_mkdir(&ctx->lfs, argv[APPCMD_ARG('p')]);
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 1) < 0) return -1;
+
+    int q = check_quota(ctx, resolved);
+    if (q < 0) return q;
+
+    return lfs_mkdir(&ctx->lfs, resolved);
 }
 
 static int cmd_mv(app_t* app, const char** argv)
@@ -554,7 +748,24 @@ static int cmd_mv(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 's') || !APPCMD_HAS(argv, 'd')) return -1;
-    return lfs_rename(&ctx->lfs, argv[APPCMD_ARG('s')], argv[APPCMD_ARG('d')]);
+
+    const char* sraw = argv[APPCMD_ARG('s')];
+    const char* draw = argv[APPCMD_ARG('d')];
+    char src[64], dst[64];
+    resolve_path(ctx, sraw, src, sizeof(src));
+    resolve_path(ctx, draw, dst, sizeof(dst));
+
+    if (check_access(ctx, src, 1) < 0 || check_access(ctx, dst, 1) < 0) return -1;
+
+    {
+        struct lfs_info ti;
+        if (lfs_stat(&ctx->lfs, dst, &ti) < 0) {
+            int q = check_quota(ctx, dst);
+            if (q < 0) return q;
+        }
+    }
+
+    return lfs_rename(&ctx->lfs, src, dst);
 }
 
 static int cmd_stat(app_t* app, const char** argv)
@@ -562,74 +773,192 @@ static int cmd_stat(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 0) < 0) return -1;
 
     struct lfs_info* info = (struct lfs_info*)osmalloc(sizeof(struct lfs_info));
     if (!info) return -1;
-    int ret = lfs_stat(&ctx->lfs, argv[APPCMD_ARG('p')], info);
+    int ret = lfs_stat(&ctx->lfs, resolved, info);
     if (ret < 0) { osfree(info); return ret; }
 
-    if (app->user_data)
-        snprintf((char*)app->user_data, 256, "type=%c size=%u name=%s\r\n",
-                 info->type == LFS_TYPE_DIR ? 'D' : 'F',
-                 (unsigned)info->size, info->name);
+    char buf[80];
+    int n = snprintf(buf, sizeof(buf), "type=%c size=%u name=%s\r\n",
+                     info->type == LFS_TYPE_DIR ? 'D' : 'F',
+                     (unsigned)info->size, info->name);
+    if (n > 0) {
+        if (app->user_data) memcpy(app->user_data, buf, (size_t)n + 1);
+        else app->output_fn(buf, n, app->output_ctx);
+    }
     osfree(info);
     return ret;
 }
 
-/* --- 持久文件 handle (callback_data/mode_data) --- */
+/* ── cd / pwd (cwd 管理) ── */
 
-static lfs_file_t* resolve_handle(app_t* app, const char** argv)
+static int cmd_cd(app_t* app, const char** argv)
 {
-    if (APPCMD_HAS(argv, 'h'))
-        return (lfs_file_t*)(uintptr_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
-    return (lfs_file_t*)app->mode_data;
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx || !ctx->mounted) return -1;
+    if (!APPCMD_HAS(argv, 'p')) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    struct lfs_info info;
+    int ret = lfs_stat(&ctx->lfs, resolved, &info);
+    if (ret < 0 || info.type != LFS_TYPE_DIR) return -1;
+
+    strcpy(ctx->cwd, resolved);
+    return 0;
 }
+
+static int cmd_pwd(app_t* app, const char** argv)
+{
+    (void)argv;
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx || !ctx->mounted) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
+
+    int n = (int)strlen(ctx->cwd);
+    if (app->user_data) {
+        memcpy(app->user_data, ctx->cwd, (size_t)n + 1);
+    } else {
+        app->output_fn(ctx->cwd, (uint32_t)n, app->output_ctx);
+        app->output_fn("\r\n", 2, app->output_ctx);
+    }
+    return n;
+}
+
+/* ── su / whoami (权限管理) ── */
+
+static int cmd_whoami(app_t* app, const char** argv)
+{
+    (void)argv;
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
+
+    static const char* names[] = {"root", "admin", "user", "guest"};
+    const char* name = names[ctx->user_level <= 3 ? ctx->user_level : 3];
+    int n = (int)strlen(name);
+    if (app->user_data) {
+        memcpy(app->user_data, name, (size_t)n + 1);
+    } else {
+        app->output_fn(name, (uint32_t)n, app->output_ctx);
+        app->output_fn("\r\n", 2, app->output_ctx);
+    }
+    return n;
+}
+
+static int cmd_su(app_t* app, const char** argv)
+{
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    if (!APPCMD_HAS(argv, 'u')) return -1;
+
+    const char* uname = argv[APPCMD_ARG('u')];
+    static const char* rnames[] = {"root", "admin", "user", "guest"};
+    static const uint8_t rlevs[] = {0, 1, 2, 3};
+    int idx = -1;
+    for (int i = 0; i < 4; i++) {
+        if (strcmp(uname, rnames[i]) == 0) { idx = i; break; }
+    }
+    if (idx < 0) return -1;
+
+    if (rlevs[idx] == 0) {
+        if (!APPCMD_HAS(argv, 'p')) return -1;
+        if (strcmp(argv[APPCMD_ARG('p')], ROOT_PW) != 0) return -1;
+    }
+
+    ctx->user_level = rlevs[idx];
+    return 0;
+}
+
+/* ── 持久文件 handle (ctx->current, 单 slot) ── */
 
 static int cmd_open(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
+
+    if (ctx->current) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
     int flags = APPCMD_HAS(argv, 'f') ? (int)strtoul(argv[APPCMD_ARG('f')], NULL, 0) : LFS_O_RDONLY;
+
+    if (check_access(ctx, resolved, (flags & (LFS_O_WRONLY | LFS_O_RDWR | LFS_O_CREAT)) ? 1 : 0) < 0) return -1;
+
+    if (flags & LFS_O_CREAT) {
+        struct lfs_info ti;
+        if (lfs_stat(&ctx->lfs, resolved, &ti) < 0) {
+            int q = check_quota(ctx, resolved);
+            if (q < 0) return q;
+        }
+    }
 
     lfs_file_t* f = (lfs_file_t*)osmalloc(sizeof(lfs_file_t));
     if (!f) return -1;
-    int ret = lfs_file_open(&ctx->lfs, f, argv[APPCMD_ARG('p')], flags);
+    int ret = lfs_file_open(&ctx->lfs, f, resolved, flags);
     if (ret < 0) { osfree(f); return ret; }
 
-    app->callback_data = f;
+    ctx->current = f;
     return 0;
 }
 
 static int cmd_close(app_t* app, const char** argv)
 {
+    (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    lfs_file_t* f = resolve_handle(app, argv);
-    if (!f) return -1;
-    int ret = lfs_file_close(&ctx->lfs, f);
-    osfree(f);
+    if (!ctx->current) return -1;
+
+    int ret = lfs_file_close(&ctx->lfs, ctx->current);
+    osfree(ctx->current);
+    ctx->current = NULL;
     return ret;
 }
 
 static int cmd_fread(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || !ctx->mounted || !app->user_data) return -1;
+    if (!ctx || !ctx->mounted) return -1;
+    if (!ctx->current) return -1;
+    if (!app->user_data && !app->output_fn) return -1;
     if (!APPCMD_HAS(argv, 'n')) return -1;
-    lfs_file_t* f = resolve_handle(app, argv);
-    if (!f) return -1;
+
     lfs_size_t n = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     if (n == 0) return -1;
-    return (int)lfs_file_read(&ctx->lfs, f, app->user_data, n);
+
+    if (app->user_data)
+        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->user_data, n);
+
+    uint8_t chunk[64];
+    lfs_size_t total = 0, rd;
+    while (total < n) {
+        lfs_size_t want = (n - total) > sizeof(chunk) ? sizeof(chunk) : (n - total);
+        rd = lfs_file_read(&ctx->lfs, ctx->current, chunk, want);
+        if (rd <= 0) break;
+        app->output_fn(chunk, rd, app->output_ctx);
+        total += rd;
+    }
+    return (int)total;
 }
 
 static int cmd_fwrite(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    lfs_file_t* f = resolve_handle(app, argv);
-    if (!f) return -1;
+    if (!ctx->current) return -1;
 
     const uint8_t* data;
     lfs_size_t len;
@@ -641,19 +970,159 @@ static int cmd_fwrite(app_t* app, const char** argv)
         len = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     } else return -1;
     if (len == 0) return -1;
-    return (int)lfs_file_write(&ctx->lfs, f, data, len);
+    return (int)lfs_file_write(&ctx->lfs, ctx->current, data, len);
 }
 
 static int cmd_fseek(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
+    if (!ctx->current) return -1;
     if (!APPCMD_HAS(argv, 'o')) return -1;
-    lfs_file_t* f = resolve_handle(app, argv);
-    if (!f) return -1;
+
     lfs_soff_t offset = (lfs_soff_t)strtoul(argv[APPCMD_ARG('o')], NULL, 0);
     int whence = APPCMD_HAS(argv, 'w') ? (int)strtoul(argv[APPCMD_ARG('w')], NULL, 0) : LFS_SEEK_SET;
-    return (int)lfs_file_seek(&ctx->lfs, f, offset, whence);
+    return (int)lfs_file_seek(&ctx->lfs, ctx->current, offset, whence);
+}
+
+/* ── feed: open file and push to target (uart/gui) ── */
+
+static int cmd_feed(app_t* app, const char** argv)
+{
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx || !ctx->mounted) return -1;
+    if (!APPCMD_HAS(argv, 'p')) return -1;
+
+    const char* raw = argv[APPCMD_ARG('p')];
+    char resolved[64];
+    resolve_path(ctx, raw, resolved, sizeof(resolved));
+
+    if (check_access(ctx, resolved, 0) < 0) return -1;
+
+    int use_gui = APPCMD_HAS(argv, 'g');
+    if (!use_gui && APPCMD_HAS(argv, 't'))
+        use_gui = (strcmp(argv[APPCMD_ARG('t')], "gui") == 0);
+
+    lfs_file_t* f = (lfs_file_t*)osmalloc(sizeof(lfs_file_t));
+    if (!f) return -1;
+    int ret = lfs_file_open(&ctx->lfs, f, resolved, LFS_O_RDONLY);
+    if (ret < 0) { osfree(f); return ret; }
+
+    lfs_size_t total = 0;
+
+    if (use_gui) {
+        app_t* gui = appget("KSCGUI");
+        if (!gui) { lfs_file_close(&ctx->lfs, f); osfree(f); return -1; }
+        appopen(gui);
+
+        uint16_t tx = APPCMD_HAS(argv, 'x') ? (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0) : 20;
+        uint16_t ty = APPCMD_HAS(argv, 'y') ? (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0) : 20;
+        uint16_t tw = APPCMD_HAS(argv, 'w') ? (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0) : 200;
+        uint16_t th_ = APPCMD_HAS(argv, 'h') ? (uint16_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0) : 200;
+        uint32_t tc = APPCMD_HAS(argv, 'c') ? strtoul(argv[APPCMD_ARG('c')], NULL, 16) : 0x001F;
+
+        if (!gui->app_data) { lfs_file_close(&ctx->lfs, f); osfree(f); return -1; }
+
+        {
+            char wc[80];
+            snprintf(wc, sizeof(wc), "wcreate -x %u -y %u -w %u -h %u -c %06lX", tx, ty, tw, th_, tc);
+            int th = appcmd(gui, wc);
+            if (th <= 0) { lfs_file_close(&ctx->lfs, f); osfree(f); return -1; }
+            char sel[24];
+            snprintf(sel, sizeof(sel), "wselect -t %d", th);
+            appcmd(gui, sel);
+        }
+
+        const uint16_t font_w = 8;
+        const uint16_t line_h = 16;
+        const uint16_t max_chars = tw / font_w;
+        uint16_t y = 0;
+
+        uint8_t chunk[64];
+        char line[60];
+        int line_len = 0;
+
+        while ((ret = lfs_file_read(&ctx->lfs, f, chunk, sizeof(chunk))) > 0) {
+            total += ret;
+            for (int i = 0; i < ret; i++) {
+                uint8_t c = chunk[i];
+                if (c == '\n' || line_len >= (int)(sizeof(line) - 1)) {
+                    if (line_len > 0) {
+                        line[line_len] = '\0';
+                        char* src = line;
+                        while (*src) {
+                            if (y >= th_) break;
+                            int seg_len = 0;
+                            while (src[seg_len] && seg_len < (int)max_chars) seg_len++;
+
+                            char sc[128];
+                            char* sp = sc;
+                            int rem = sizeof(sc);
+                            int n = snprintf(sp, rem, "string -x 4 -y %d -s \"", y);
+                            if (n > 0) { int adv = (n < rem ? n : rem - 1); sp += adv; rem -= adv; }
+                            for (int j = 0; j < seg_len && rem > 2; j++) {
+                                if (src[j] == '"' || src[j] == '\\') { *sp++ = '\\'; rem--; }
+                                *sp++ = src[j]; rem--;
+                            }
+                            if (rem > 1) { *sp++ = '"'; rem--; }
+                            snprintf(sp, rem, " -c FFFF -b %06lX", tc);
+                            appcmd(gui, sc);
+
+                            y += line_h;
+                            src += seg_len;
+                        }
+                    }
+                    line_len = 0;
+                } else if (c != '\r') {
+                    line[line_len++] = (char)c;
+                }
+            }
+        }
+        if (line_len > 0 && y < th_) {
+            line[line_len] = '\0';
+            char* src = line;
+            while (*src && y < th_) {
+                int seg_len = 0;
+                while (src[seg_len] && seg_len < (int)max_chars) seg_len++;
+
+                char sc[128];
+                char* sp = sc;
+                int rem = sizeof(sc);
+                int n = snprintf(sp, rem, "string -x 4 -y %d -s \"", y);
+                if (n > 0) { int adv = (n < rem ? n : rem - 1); sp += adv; rem -= adv; }
+                for (int j = 0; j < seg_len && rem > 2; j++) {
+                    if (src[j] == '"' || src[j] == '\\') { *sp++ = '\\'; rem--; }
+                    *sp++ = src[j]; rem--;
+                }
+                if (rem > 1) { *sp++ = '"'; rem--; }
+                snprintf(sp, rem, " -c FFFF -b %06lX", tc);
+                appcmd(gui, sc);
+
+                y += line_h;
+                src += seg_len;
+            }
+        }
+    } else {
+        if (!app->user_data && !app->output_fn) {
+            lfs_file_close(&ctx->lfs, f); osfree(f); return -1;
+        }
+        if (app->user_data) {
+            lfs_size_t max = APPCMD_HAS(argv, 'n')
+                ? (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0) : 256;
+            total = lfs_file_read(&ctx->lfs, f, app->user_data, max);
+        } else {
+            uint8_t chunk[64];
+            lfs_size_t rd;
+            while ((rd = lfs_file_read(&ctx->lfs, f, chunk, sizeof(chunk))) > 0) {
+                app->output_fn(chunk, rd, app->output_ctx);
+                total += rd;
+            }
+        }
+    }
+
+    lfs_file_close(&ctx->lfs, f);
+    osfree(f);
+    return (int)total;
 }
 
 /* --- dispatch --- */
@@ -667,12 +1136,17 @@ static int lfs_cmd(app_t* app, const char* cmdname, const char** argv)
         {"info",     cmd_info},
         {"ls",       cmd_ls},
         {"cat",      cmd_cat},
+        {"feed",     cmd_feed},
         {"writenew", cmd_writenew},
         {"append",   cmd_append},
         {"rm",       cmd_rm},
         {"mkdir",    cmd_mkdir},
         {"mv",       cmd_mv},
         {"stat",     cmd_stat},
+        {"cd",       cmd_cd},
+        {"pwd",      cmd_pwd},
+        {"whoami",   cmd_whoami},
+        {"su",       cmd_su},
         {"open",     cmd_open},
         {"close",    cmd_close},
         {"fread",    cmd_fread},

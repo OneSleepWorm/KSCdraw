@@ -998,6 +998,25 @@ static int cmd_setdrawfunc(app_t* app, const char** argv)
  * appcmd: image drawing
  * ================================================================ */
 
+static int cmd_drawrow(app_t* app, const char** argv)
+{
+    gui_ctx_t* ctx = app->app_data;
+    if (!ctx || !ctx->active_handle) return -1;
+    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
+    if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') || !APPCMD_HAS(argv, 'w')) return -1;
+    uint16_t x = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
+    uint16_t y = (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
+    uint16_t w = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
+    const uint8_t* img = (const uint8_t*)app->user_data;
+    if (!img) return -1;
+    uint32_t n = (uint32_t)w * 2;
+    if (n > sizeof(ctx->pixbuf)) return -1;
+    gui_window_setcanvas(&ctx->dev, scr, x, y, w, 1);
+    memcpy(ctx->pixbuf, img, n);
+    appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
+    return 1;
+}
+
 static int cmd_image(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = app->app_data;
@@ -1115,6 +1134,7 @@ static const gui_appcmd_t gui_appcmds[] = {
     {"getobjpool",  cmd_getobjpool},
     {"setdrawfunc", cmd_setdrawfunc},
     /* image drawing */
+    {"drawrow",     cmd_drawrow},
     {"image",       cmd_image},
     {"ibig",        cmd_ibig},
     {"ibin",        cmd_ibin},
