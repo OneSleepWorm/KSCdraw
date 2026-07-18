@@ -77,7 +77,7 @@ app_t* appget(const char* name)
         if (!papp->base || strcmp(name, papp->base->app_name) != 0)
             continue;
 
-        app_t* app = osmalloc(sizeof(app_t));
+        app_t* app = (app_t*)osmalloc(sizeof(app_t));
         if (!app) return NULL;
 
         app->papp        = papp;

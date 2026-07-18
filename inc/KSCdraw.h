@@ -4,15 +4,9 @@
 #include "KSCconfig.h"
 
 #if __USE_LCD__ ==1
-#ifdef __cplusplus
-extern "C" {
-#endif
 void screen_init(void* data);
 void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num);
 void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
-#ifdef __cplusplus
-}
-#endif
 #include "KSCimg.h"
 #include "KSCfont.h"
 

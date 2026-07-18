@@ -627,7 +627,6 @@ void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
 #if __USE_PC__
 #include "../third_party/easyx/include/graphics.h"
 #include <stdio.h>
-
 static uint32_t color16to24(uint16_t color16)
 {
     uint8_t r5 = (color16 >> 11) & 0x1F;

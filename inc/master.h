@@ -5,7 +5,7 @@
 #include "../third_party/littlefs/lfs.h"
 #include "KSCdraw.h"
 #include "KSCconfig.h"
-#include "application.h"
+#include "app.h"
 #include "KSCOSsystem.h"
 
 

@@ -95,10 +95,5 @@ typedef int16_t ki16;
 #define yyellow 0xE0FF
 #endif
 
-#if __USE_STM32__
-#define KSC_CONSOLE_DRIVER "uart_printf_1"
-#elif __USE_PC__
-#define KSC_CONSOLE_DRIVER "sys_console"
-#endif
 
 #endif

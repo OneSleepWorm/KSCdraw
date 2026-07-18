@@ -305,7 +305,7 @@ appwrite(spi, (void*)frame, 1024, SSPI_MODE(1, tft1, SSPI_SEND_DAT_DMA));
 
 | API | 说明 |
 |-----|------|
-| `sys_init()` | STM32: 使能 AFIO+SWJ 重映射 → `pll_init()` (HSE×9=72MHz) → `SysTick_Config` → `appget("uart_serial")` + `appopen` + `appcmd "open -i 1"` → 设 `ksc_console`。PC: 通过遗留 `bus_getdriver` 拿 console |
+| `sys_init()` | STM32: 使能 AFIO+SWJ 重映射 → `pll_init()` (HSE×9=72MHz) → `SysTick_Config` → `appget("uart_serial")` + `appopen` + `appcmd "open -i 1"` → 设 `ksc_console`。PC: 空操作 (无操作), `ksc_console` = NULL, `kscprintf` 直接走 `printf` |
 | `sysdelay(ms)` | 基于 `sys_tick_ms` 阻塞延时 |
 | `sysgettime()` | 返回 `sys_tick_ms` (开机毫秒计数) |
 | `osmalloc(size)` / `osfree(p)` / `oscalloc(n,sz)` | 框架内统一堆接口, STM32 上为 libc `malloc/calloc/free` |
@@ -427,6 +427,7 @@ typedef struct ksc_obj_t {
 | `littlefs` | `w25qxx_base` | STM32 | littlefs 文件系统: 一次性 (`writenew`/`append`/`cat`/`ls`/`rm`/`mkdir`/`mv`/`stat`) + 持久 fd (`open`/`close`/`fread`/`fwrite`/`fseek`) | `littlefs_fs.c` |
 | `terminal` | — | STM32 | 字符串路由分发器: UART RX → 攒行 → 按 `appname subcmd -x v` 路由到 `appget` 目标; 内建 `help`/`echo` | `terminal.c` |
 | `open` | `littlefs` | STM32 | 按扩展名路由文件打开 (`.txt` → uart, `.bmp` → gui) | `open.c` |
+| `upload` | `littlefs` | STM32 | （未完成）PC ↔ 板端文件传输 | `upload.c` |
 
 跨 App 共享类型 (常量 / 结构) 定义在 `apps/app_config.h`:
 - `SSPI_MODE(spi_inst, dev_id, op)` / `SSPI_XFER_INST(i)` — super_spi mode 编码宏

@@ -1,10 +1,11 @@
 add_library(KSCOS_SRC 
+                        app.c
                         KSCdraw.c
                         KSCfont.c
                         KSCimg.c
                         KSCOSsystem.c
 )
-set_source_files_properties(KSCdraw.c PROPERTIES LANGUAGE CXX)
+set_source_files_properties(app.c KSCfont.c KSCimg.c KSCOSsystem.c KSCdraw.c PROPERTIES LANGUAGE CXX)
 
 target_compile_definitions(KSCOS_SRC PUBLIC __USE_AUTO__=1 __USE_PC__=1 __USE_STM32__=0)
 

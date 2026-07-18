@@ -1,8 +1,27 @@
 #include "../inc/KSCOSsystem.h"
-#include "stdlib.h"
+#include <stdlib.h>
 #include <string.h>
 
+/* ================================================================
+ * 共享实现 (所有平台)
+ * ================================================================ */
+
+void* osmalloc(size_t size) { return malloc(size); }
+void osfree(void* ptr) { free(ptr); }
+void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
+
+ki8 KSCOS_default_Error_Handler(void* data)
+{
+    (void)data;
+    KSCOS_Error_Handler();
+    return -1;
+}
+
+/* ================================================================
+ * STM32 平台
+ * ================================================================ */
 #if __USE_STM32__
+
 #include "stm32f1xx.h"
 #include "app.h"
 #include <stdio.h>
@@ -102,42 +121,39 @@ void KSCOSSystemClock_Init(unsigned char clock_type)
     KSCOSsystem_Clock = 8000000;
 }
 
-#else
-dd_t*  ksc_console = NULL;
-
-void sysdelay(uint32_t ms) { (void)ms; }
-uint32_t sysgettime(void) { return 0; }
-
-void sys_init(void)
-{
-    ksc_console = bus_getdriver(KSC_CONSOLE_DRIVER);
-    if (ksc_console) ddopen(ksc_console);
-}
-
-void KSCOSSystemClock_Init(uint8_t clock_type) { (void)clock_type; }
-#endif
-
-void* osmalloc(size_t size) { return malloc(size); }
-void osfree(void* ptr) { free(ptr); }
-void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
-
-#if __USE_STM32__
 void KSCOS_Error_Handler(void)
 {
     __disable_irq();
     while (1);
 }
-#else
-#include <stdio.h>
-void KSCOS_Error_Handler(void)
-{
-    while (1);
-}
-#endif
 
-ki8 KSCOS_default_Error_Handler(void* data)
+/* ================================================================
+ * PC 平台
+ * ================================================================ */
+#elif __USE_PC__
+
+#include <stdio.h>
+#include <windows.h>
+
+app_t* ksc_console = NULL;
+volatile uint32_t KSCOSsystem_Clock = 0;
+
+void sysdelay(uint32_t ms) { Sleep(ms); }
+uint32_t sysgettime(void) { return GetTickCount(); }
+
+void sys_init(void) { }
+
+void kscprintf(const char* fmt, ...)
 {
-    (void)data;
-    KSCOS_Error_Handler();
-    return -1;
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
 }
+
+void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }
+void KSCOS_Error_Handler(void) { while (1); }
+
+#else
+#error "KSCOS: No platform selected. Define __USE_STM32__, __USE_PC__, or __USE_ESP32__ as 1."
+#endif

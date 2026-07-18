@@ -1,3 +1,5 @@
+> **⚠️ 过时提示:** 本文档部分内容（如 `appioctl` 调用、`app_dep` 双 SPI 描述）已与当前 `appcmd` 框架不一致。最新 API 契约请参考 `examples/api/apps.md` 和 `apps/kscgui.c` 源码。
+
 # KSCGUI — ioctl 命令参考
 
 ## 概述
