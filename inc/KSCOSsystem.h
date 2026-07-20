@@ -12,12 +12,16 @@
 
 extern volatile uint32_t KSCOSsystem_Clock;
 extern app_t* ksc_console;
+extern app_t* ksc_term;
 
 #if __USE_STM32__
 extern volatile uint32_t sys_tick_ms;
 #endif
 
 void kscprintf(const char* fmt, ...);
+void kscread(void* data);
+int ksccmd(void* data);
+
 void KSCOSSystemClock_Init(uint8_t clock_type);
 void KSCOS_Error_Handler(void);
 ki8 KSCOS_default_Error_Handler(void* data);

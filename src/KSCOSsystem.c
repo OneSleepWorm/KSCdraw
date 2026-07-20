@@ -136,6 +136,7 @@ void KSCOS_Error_Handler(void)
 #include <windows.h>
 
 app_t* ksc_console = NULL;
+app_t* ksc_term    = NULL;
 volatile uint32_t KSCOSsystem_Clock = 0;
 
 void sysdelay(uint32_t ms) { Sleep(ms); }
@@ -147,6 +148,11 @@ void sys_init(void)
     if (con) {
         appopen(con);
         ksc_console = con;
+    }
+    app_t* term = appget("terminal");
+    if (term) {
+        appopen(term);
+        ksc_term = term;
     }
 }
 
@@ -163,6 +169,21 @@ void kscprintf(const char* fmt, ...)
         appwrite(ksc_console, buf, len, 0x11);
     }
 }
+
+int ksccmd(void* data)
+{
+    if (!ksc_term || !data) return -1;
+    size_t len = strlen((const char*)data);
+    return appwrite(ksc_term, data, (uint32_t)len, 1);
+}
+
+void kscread(void* data)
+{
+    if (!ksc_console) return;
+    appread(ksc_console, data, 64, 1);
+}
+
+
 
 void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }
 void KSCOS_Error_Handler(void) { while (1); }

@@ -1098,9 +1098,74 @@ static int cmd_ibin(app_t* app, const char** argv)
     return 1;
 }
 
+static int cmd_drawbmp(app_t* app, const char** argv)
+{
+    (void)argv;
+    gui_ctx_t* ctx = GUI_CTX(app);
+    if (!ctx || !ctx->active_handle) return -1;
+    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
+
+    app_t* open_app = appget("open");
+    if (!open_app) return -1;
+
+    uint8_t header[54];
+    int n = appread(open_app, header, sizeof(header), 0);
+    if (n < 54) return -1;
+    if (header[0] != 'B' || header[1] != 'M') return -1;
+
+    int32_t w = *(int32_t*)&header[18];
+    int32_t h = *(int32_t*)&header[22];
+    uint16_t bpp = *(uint16_t*)&header[28];
+    uint32_t compression = *(uint32_t*)&header[30];
+    uint32_t pixel_off = *(uint32_t*)&header[10];
+
+    if (bpp != 24 || compression != 0) return -1;
+
+    int bottom_up = 1;
+    if (h < 0) { h = -h; bottom_up = 0; }
+    if (w <= 0 || h <= 0 || w > 240 || h > 240) return -1;
+
+    if (pixel_off > sizeof(header)) {
+        uint32_t skip = pixel_off - sizeof(header);
+        uint8_t tmp[64];
+        while (skip > 0) {
+            uint32_t rd = skip > sizeof(tmp) ? sizeof(tmp) : skip;
+            appread(open_app, tmp, rd, 0);
+            skip -= rd;
+        }
+    }
+
+    uint32_t np = (uint32_t)w * h;
+    KSCCOLOR* pixels = (KSCCOLOR*)osmalloc(np * sizeof(KSCCOLOR));
+    if (!pixels) return -1;
+
+    int row_pad = ((w * 3 + 3) / 4) * 4;
+    uint8_t* row = (uint8_t*)osmalloc(row_pad > 64 ? row_pad : 64);
+    if (!row) { osfree(pixels); return -1; }
+
+    for (int y = 0; y < h; y++) {
+        int got = appread(open_app, row, row_pad, 0);
+        if (got < 0) break;
+        int dst_y = bottom_up ? (h - 1 - y) : y;
+        KSCCOLOR* dst = pixels + dst_y * w;
+        for (int x = 0; x < w && x * 3 + 2 < got; x++) {
+            uint8_t b = row[x * 3];
+            uint8_t g = row[x * 3 + 1];
+            uint8_t r = row[x * 3 + 2];
+            dst[x] = (KSCCOLOR)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+        }
+    }
+
+    osfree(row);
+    kdrawimage(&ctx->dev, scr, pixels, 0, 0, (uint8_t)w, (uint8_t)h);
+    osfree(pixels);
+
+    return 1;
+}
+
 /* ================================================================
  * appcmd dispatcher (SHARED)
- * ================================================================ */
+ ================================================================ */
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } gui_appcmd_t;
 
 static const gui_appcmd_t gui_appcmds[] = {
@@ -1139,6 +1204,7 @@ static const gui_appcmd_t gui_appcmds[] = {
     {"setobjpool",  cmd_setobjpool},
     {"getobjpool",  cmd_getobjpool},
     {"setdrawfunc", cmd_setdrawfunc},
+    {"drawbmp",     cmd_drawbmp},
 #if __USE_STM32__
     {"drawrow",     cmd_drawrow},
     {"image",       cmd_image},

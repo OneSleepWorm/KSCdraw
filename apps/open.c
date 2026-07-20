@@ -5,11 +5,13 @@
 
 #if __USE_STM32__ || __USE_PC__
 
+/* ── route table (old style, backward compat) ── */
+
 typedef struct {
     const char* ext;
     const char* src_app;
     const char* subcmd;
-    const char* default_target;  /* "uart" or "gui" */
+    const char* default_target;
 } open_route_t;
 
 static const open_route_t routes[] = {
@@ -18,10 +20,64 @@ static const open_route_t routes[] = {
     {NULL,   NULL,       NULL,   NULL}
 };
 
+/* ── "file" subcommand: open file and let GUI/app pull via appread ── */
+
+static int cmd_open_file(app_t* app, const char* cmdname, const char** argv)
+{
+    (void)cmdname;
+    const char* path = argv[APPCMD_ARG('p')];
+    if (!path) return -1;
+
+    app_t* lfs = appget("littlefs");
+    if (!lfs) return -1;
+
+    const char* oa[26] = {0};
+    oa['p' - 'a'] = path;
+    if (appcmd_argv(lfs, "open", oa) < 0)
+        return -1;
+
+    const char* ext = strrchr(path, '.');
+    if (!ext) ext = "";
+
+    int r = 0;
+
+    if (strcmp(ext, ".bmp") == 0) {
+        app_t* gui = appget("KSCGUI");
+        if (gui)
+            r = appcmd(gui, "drawbmp");
+        else
+            r = -1;
+    } else {
+        if (app->output_fn) {
+            uint8_t buf[64];
+            int n;
+            do {
+                lfs->callback_data = buf;
+                char ns[12];
+                snprintf(ns, sizeof(ns), "%zu", sizeof(buf));
+                const char* ra[26] = {0};
+                ra['n' - 'a'] = ns;
+                n = appcmd_argv(lfs, "fread", ra);
+                lfs->callback_data = NULL;
+                if (n > 0)
+                    app->output_fn(buf, n, app->output_ctx);
+            } while (n > 0);
+        }
+    }
+
+    appcmd_argv(lfs, "close", NULL);
+    return r;
+}
+
+/* ── appcmd dispatch ── */
+
 static int open_cmd(app_t* app, const char* cmdname, const char** argv)
 {
-    (void)app;
-    (void)cmdname;
+    if (strcmp(cmdname, "file") == 0)
+        return cmd_open_file(app, cmdname, argv);
+
+    /* --- old route table (backward compat) --- */
+
     const char* path = argv[APPCMD_ARG('p')];
     if (!path) return -1;
 
@@ -40,7 +96,6 @@ static int open_cmd(app_t* app, const char* cmdname, const char** argv)
     app_t* src = appget(src_name);
     if (!src) return -1;
 
-    /* Determine target flag */
     const char* tgt = NULL;
     if (APPCMD_HAS(argv, 't')) {
         tgt = argv[APPCMD_ARG('t')];
@@ -52,7 +107,6 @@ static int open_cmd(app_t* app, const char* cmdname, const char** argv)
         tgt = def_tgt;
     }
 
-    /* Build forwarded argv (copy by index, override target) */
     const char* fwd_argv[28];
     for (int i = 0; i < 26; i++)
         fwd_argv[i] = argv[i];
@@ -62,7 +116,6 @@ static int open_cmd(app_t* app, const char* cmdname, const char** argv)
     fwd_argv[APPCMD_ARG('u')] = NULL;
     fwd_argv[APPCMD_ARG('t')] = tgt;
 
-    /* Forward output_fn to source app */
     app_output_fn saved_ofn = src->output_fn;
     void* saved_octx = src->output_ctx;
     src->output_fn = app->output_fn;
@@ -75,10 +128,28 @@ static int open_cmd(app_t* app, const char* cmdname, const char** argv)
     return r;
 }
 
+/* ── app lifecycle ── */
+
 static int open_open(app_t* app) { (void)app; return 0; }
 static int open_close(app_t* app) { (void)app; return 0; }
+
 static int open_read(app_t* app, void* data, uint32_t count, uint32_t mode)
-{ (void)app; (void)data; (void)count; (void)mode; return 0; }
+{
+    (void)app;
+    (void)mode;
+    app_t* lfs = appget("littlefs");
+    if (!lfs) return 0;
+
+    lfs->callback_data = data;
+    char ns[12];
+    snprintf(ns, sizeof(ns), "%u", count);
+    const char* ra[26] = {0};
+    ra['n' - 'a'] = ns;
+    int r = appcmd_argv(lfs, "fread", ra);
+    lfs->callback_data = NULL;
+    return r;
+}
+
 static int open_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 { (void)app; (void)data; (void)count; (void)mode; return 0; }
 
@@ -90,7 +161,7 @@ static const papp_ops_t open_ops = {
     .cmd   = open_cmd,
 };
 
-REGISTER_APP_EX("open", NULL, "1\0littlefs", &open_ops,
-    "Route file open by extension to source app");
+REGISTER_APP_EX("open", NULL, "2\0littlefs\0KSCGUI", &open_ops,
+    "Route file open by extension to source app; 'file' subcmd for pull model");
 
 #endif

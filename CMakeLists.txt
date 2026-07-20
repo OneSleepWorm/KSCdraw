@@ -23,15 +23,17 @@ add_subdirectory(src)
 
 target_sources(KSCOS PRIVATE
     apps/uart_serial.c apps/kscgui.c apps/tim_clock.c apps/button16.c apps/snake.c apps/list.c apps/terminal.c apps/open.c
-    apps/w25qxx_base.c apps/littlefs_fs.c
-    third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c)
+    apps/w25qxx_base.c apps/littlefs_fs.c apps/transfer.c
+    third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c
+    third_party/async_xmodem/xmodem_server.c)
 set_source_files_properties(
     apps/uart_serial.c apps/kscgui.c apps/tim_clock.c apps/button16.c apps/snake.c apps/list.c apps/terminal.c apps/open.c
-    apps/w25qxx_base.c apps/littlefs_fs.c PROPERTIES LANGUAGE CXX)
+    apps/w25qxx_base.c apps/littlefs_fs.c apps/transfer.c PROPERTIES LANGUAGE CXX)
 set_source_files_properties(
-    third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c PROPERTIES LANGUAGE C)
+    third_party/littlefs/lfs.c third_party/littlefs/lfs_util.c
+    third_party/async_xmodem/xmodem_server.c PROPERTIES LANGUAGE C)
 
-target_include_directories(KSCOS PRIVATE third_party/littlefs)
+target_include_directories(KSCOS PRIVATE third_party/littlefs third_party/async_xmodem)
 
 target_link_libraries(KSCOS PRIVATE KSCOS_SRC easyx)
 

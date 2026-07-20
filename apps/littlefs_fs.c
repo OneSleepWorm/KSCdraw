@@ -926,7 +926,7 @@ static int cmd_fread(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!ctx->current) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->user_data && !app->callback_data && !app->output_fn) return -1;
     if (!APPCMD_HAS(argv, 'n')) return -1;
 
     lfs_size_t n = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
@@ -934,6 +934,8 @@ static int cmd_fread(app_t* app, const char** argv)
 
     if (app->user_data)
         return (int)lfs_file_read(&ctx->lfs, ctx->current, app->user_data, n);
+    if (app->callback_data)
+        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->callback_data, n);
 
     uint8_t chunk[64];
     lfs_size_t total = 0, rd;

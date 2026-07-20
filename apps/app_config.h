@@ -106,15 +106,16 @@ typedef struct {
 } ctrl_keymap_t;
 
 /* ================================================================
- * upload — binary upload state
+ * transfer — XMODEM file transfer state
  * ================================================================ */
 
-typedef struct upload_ctx_t {
-    struct app_t*   lfs;
-    uint8_t         chunk[256];
-    uint32_t        chunk_len;
-    uint32_t        remaining;
-    int             active;
-} upload_ctx_t;
+#include "../third_party/async_xmodem/xmodem_server.h"
+
+typedef struct transfer_ctx_t {
+    struct app_t*           uart;
+    struct app_t*           lfs;
+    struct xmodem_server    xdm;
+    int                     active;
+} transfer_ctx_t;
 
 #endif

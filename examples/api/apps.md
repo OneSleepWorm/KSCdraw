@@ -411,6 +411,8 @@ KSCGUI 内部维护 16 个 `KSC_window` 槽 (capacity 16, 每槽含 `ksc_obj_t[]
 | `image -x -y -w -h` | 从 `app->user_data` 绘 RGB565 图 |
 | `ibin  -x -y -w -h -c -b` | 1-bit 二值图 |
 | `ibig  -x -y -w -h -s <scale>` | 缩放图 |
+| `drawbmp` | — | 从 open app 拉 BMP 数据流，解码 24-bit 并渲染到 active tile |
+
 
 #### 对象
 
@@ -669,7 +671,7 @@ appcmd(flash, "erase -a 0 -s 4096");
 |------|------|------|------|
 | `open` | `-p <path> [-f <flags>]` | 0/-1 (→ callback_data) | 默认 `LFS_O_RDONLY` (0x1)；`-f` 16 进制 flags |
 | `close` | — | 0/-1 | close + free handle (取自 mode_data) |
-| `fread` | `-n <max>` | 字节 / -1 (→ user_data) | |
+| `fread` | `-n <max>` | 字节 / -1 (→ user_data / callback_data) | |
 | `fwrite` | `[-d <text>]` | 写入字节 / -1 | `-d` 优先；否则用 user_data + `-n` |
 | `fseek` | `-o <offset> [-w <whence>]` | 新位置 / -1 | whence: 0=SET, 1=CUR, 2=END |
 
@@ -761,9 +763,41 @@ appwrite(term, "littlefs ls -p /\r\n", 17, 1); /* 路由到 littlefs */
 
 ## open
 
-> 按扩展名路由文件打开。 极薄包装，没有内部状态。
+> 按扩展名路由文件打开。`file` 子命令用 pull 模型，GUI 通过 `appread` 拉数据流。
 
-### 路由表
+### 注册信息
+
+`REGISTER_APP_EX("open", NULL, "2\0littlefs\0KSCGUI", &open_ops,
+    "Route file open by extension to source app; 'file' subcmd for pull model")`
+
+### 数据流
+
+`open_read` 通过设置 littlefs 的 `callback_data` 调用 `fread` 实现数据拉取：
+
+```
+GUI (drawbmp) → appread(open, buf, n) → open_read
+  → lfs->callback_data = data
+  → appcmd_argv(lfs, "fread", ...)    ← 标准 littlefs 命令
+  → lfs->callback_data = NULL
+  → 返回读取字节
+```
+
+### `appcmd` 子命令: `file`
+
+| 命令 | 参数 | 返回 | 说明 |
+|------|------|------|------|
+| `file` | `-p <path>` | 0/-1 | 打开文件，按扩展名路由 |
+
+路由行为：
+
+| 扩展名 | 行为 |
+|--------|------|
+| `.bmp` | `littlefs open` → `appcmd(KSCGUI, "drawbmp")` → GUI 内部 `appread(open)` 拉数据 → 解码 → `kdrawimage` 渲染 |
+| `.txt` / 其他 | `littlefs open` → 循环 `fread` → `output_fn` 推送 |
+
+### 旧行为 (向后兼容)
+
+旧 `open open -p /path` 形式仍可用。走路由表转发 `argv` 到 `littlefs feed`，行为不变。
 
 | 扩展名 | 源 App | subcmd | 默认目标 |
 |--------|--------|--------|---------|
@@ -771,28 +805,18 @@ appwrite(term, "littlefs ls -p /\r\n", 17, 1); /* 路由到 littlefs */
 | `.bmp` | `littlefs` | `feed` | `gui` |
 | 其它 | `littlefs` | `info` | `uart` |
 
-### `appcmd` 命令
-
-只有默认派发参数：路径 + 可选目标。
-
-| flag | 说明 |
-|------|------|
-| `-p <path>` | 文件路径 |
-| `-t <target>` | 显式目标 (`uart` 或 `gui`) |
-| `-g` | 简写 `-t gui` |
-| `-u` | 简写 `-t uart` |
-
-行为：内部 `appget(littlefs)` → 把 `argv` 拷贝并改写 `-t` → 调 `appcmd_argv(lfs, subcmd, fwd_argv)`，期间临时把 `src->output_fn/ctx` 复制为 `app->output_fn/ctx`。
-
 ### 用例
 
 ```c
-appcmd(open_app, "open -p /notes.txt");            /* → uart */
-appcmd(open_app, "open -p /photo.bmp -g");         /* → gui */
+/* file 子命令 (推荐) */
+appcmd(open_app, "file -p /notes.txt");            /* → output_fn 推送 */
+appcmd(open_app, "file -p /photo.bmp");            /* → GUI drawbmp */
+
+/* 旧形式 (向后兼容) */
+appcmd(open_app, "open -p /notes.txt");            /* → uart via feed */
+appcmd(open_app, "open -p /photo.bmp -g");         /* → gui via feed */
 appcmd(open_app, "open -p /data.bin -u");          /* → uart 强制 */
 ```
-
-> 实际命令字串不需要 `open` 子命令名 — 本 App 的 cmd 实现只看 flags。 但 `appcmd` 解析把第一个 token 当 cmdname，调用方通常塞个 dummy：`appcmd(open_app, "open -p /notes.txt")` 让 cmdname="open" 被丢弃，flags 仍可用。
 
 ---
 
