@@ -229,6 +229,11 @@ int appcmd(app_t* app, const char* cmdline)
                 argv[idx] = "";
             }
         } else {
+            char* ep = p;
+            while (*ep && *ep != ' ') ep++;
+            int n = (int)(ep - p);
+            if (n > 0)
+                kscprintf("appcmd: unknown arg '%.*s' (use -p for path?)\r\n", n, p);
             break;
         }
     }

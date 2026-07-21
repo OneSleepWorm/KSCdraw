@@ -445,7 +445,7 @@ typedef struct {
 static void pc_uart_default_path(char* out, size_t sz, const char* filename)
 {
     GetModuleFileNameA(NULL, out, (DWORD)sz);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         char* sep = strrchr(out, '\\');
         if (sep) *sep = '\0';
     }

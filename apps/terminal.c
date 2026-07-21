@@ -66,11 +66,6 @@ static int term_dispatch(app_t* app, const char* cmdline)
         term_help(app);
         return 0;
     }
-    if (strcmp(appname, "echo") == 0) {
-        term_console_puts(ctx->console, rest);
-        term_console_puts(ctx->console, "\r\n");
-        return 0;
-    }
 
     app_t* target = appget(appname);
     if (!target) {

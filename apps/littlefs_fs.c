@@ -214,7 +214,7 @@ static int lfs_app_open(app_t* app)
     ctx->cwd[0] = '/'; ctx->cwd[1] = 'h'; ctx->cwd[2] = 'o'; ctx->cwd[3] = 'm';
     ctx->cwd[4] = 'e'; ctx->cwd[5] = 0;
     ctx->current = 0;
-    ctx->user_level = 2;
+    ctx->user_level = 0;
 
     app->app_data = ctx;
     return 0;
@@ -517,10 +517,12 @@ static int cmd_format(app_t* app, const char** argv)
 {
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-    if (ctx->user_level != 0) return -1;
-    if (ctx->mounted) return -1;
-    return lfs_format(&ctx->lfs, &ctx->cfg);
+    if (!ctx) { kscprintf("format: no ctx\r\n"); return -1; }
+    if (ctx->user_level != 0) { kscprintf("format: need root\r\n"); return -1; }
+    if (ctx->mounted) { kscprintf("format: already mounted\r\n"); return -1; }
+    int ret = lfs_format(&ctx->lfs, &ctx->cfg);
+    if (ret) kscprintf("format failed: %d\r\n", ret);
+    return ret;
 }
 
 static int cmd_mount(app_t* app, const char** argv)
@@ -878,10 +880,9 @@ static int cmd_su(app_t* app, const char** argv)
 static int cmd_open(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || !ctx->mounted) return -1;
-    if (!APPCMD_HAS(argv, 'p')) return -1;
-
-    if (ctx->current) return -1;
+    if (!ctx || !ctx->mounted) { kscprintf("open: not mounted\r\n"); return -1; }
+    if (!APPCMD_HAS(argv, 'p')) { kscprintf("open: missing -p\r\n"); return -1; }
+    if (ctx->current) { kscprintf("open: close current first\r\n"); return -1; }
 
     const char* raw = argv[APPCMD_ARG('p')];
     char resolved[64];
@@ -889,20 +890,22 @@ static int cmd_open(app_t* app, const char** argv)
 
     int flags = APPCMD_HAS(argv, 'f') ? (int)strtoul(argv[APPCMD_ARG('f')], NULL, 0) : LFS_O_RDONLY;
 
-    if (check_access(ctx, resolved, (flags & (LFS_O_WRONLY | LFS_O_RDWR | LFS_O_CREAT)) ? 1 : 0) < 0) return -1;
+    if (check_access(ctx, resolved, (flags & (LFS_O_WRONLY | LFS_O_RDWR | LFS_O_CREAT)) ? 1 : 0) < 0) {
+        kscprintf("open: permission denied\r\n"); return -1;
+    }
 
     if (flags & LFS_O_CREAT) {
         struct lfs_info ti;
         if (lfs_stat(&ctx->lfs, resolved, &ti) < 0) {
             int q = check_quota(ctx, resolved);
-            if (q < 0) return q;
+            if (q < 0) { kscprintf("open: quota exceeded (%d)\r\n", q); return q; }
         }
     }
 
     lfs_file_t* f = (lfs_file_t*)osmalloc(sizeof(lfs_file_t));
-    if (!f) return -1;
+    if (!f) { kscprintf("open: alloc fail\r\n"); return -1; }
     int ret = lfs_file_open(&ctx->lfs, f, resolved, flags);
-    if (ret < 0) { osfree(f); return ret; }
+    if (ret < 0) { osfree(f); kscprintf("open: lfs error %d\r\n", ret); return ret; }
 
     ctx->current = f;
     return 0;
@@ -912,12 +915,13 @@ static int cmd_close(app_t* app, const char** argv)
 {
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || !ctx->mounted) return -1;
-    if (!ctx->current) return -1;
+    if (!ctx || !ctx->mounted) { kscprintf("close: not mounted\r\n"); return -1; }
+    if (!ctx->current) { kscprintf("close: no open file\r\n"); return -1; }
 
     int ret = lfs_file_close(&ctx->lfs, ctx->current);
     osfree(ctx->current);
     ctx->current = NULL;
+    if (ret) kscprintf("close: lfs error %d\r\n", ret);
     return ret;
 }
 
@@ -952,8 +956,8 @@ static int cmd_fread(app_t* app, const char** argv)
 static int cmd_fwrite(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
-    if (!ctx || !ctx->mounted) return -1;
-    if (!ctx->current) return -1;
+    if (!ctx || !ctx->mounted) { kscprintf("fwrite: not mounted\r\n"); return -1; }
+    if (!ctx->current) { kscprintf("fwrite: no open file\r\n"); return -1; }
 
     const uint8_t* data;
     lfs_size_t len;
@@ -963,9 +967,40 @@ static int cmd_fwrite(app_t* app, const char** argv)
     } else if (app->user_data && APPCMD_HAS(argv, 'n')) {
         data = (const uint8_t*)app->user_data;
         len = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
-    } else return -1;
-    if (len == 0) return -1;
-    return (int)lfs_file_write(&ctx->lfs, ctx->current, data, len);
+    } else { kscprintf("fwrite: no data\r\n"); return -1; }
+    if (len == 0) { kscprintf("fwrite: zero len\r\n"); return -1; }
+    int ret = (int)lfs_file_write(&ctx->lfs, ctx->current, data, len);
+    if (ret < 0) kscprintf("fwrite: error %d\r\n", ret);
+    return ret;
+}
+
+static int cmd_echo(app_t* app, const char** argv)
+{
+    lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
+    if (!ctx || !ctx->mounted) return -1;
+    if (!APPCMD_HAS(argv, 'm')) return -1;
+
+    const char* msg = argv[APPCMD_ARG('m')];
+    size_t len = strlen(msg);
+
+    if (APPCMD_HAS(argv, 'p')) {
+        char resolved[64];
+        resolve_path(ctx, argv[APPCMD_ARG('p')], resolved, sizeof(resolved));
+        lfs_file_t f;
+        int ret = lfs_file_open(&ctx->lfs, &f, resolved,
+                                LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
+        if (ret < 0) { kscprintf("echo: open err %d\r\n", ret); return ret; }
+        ret = (int)lfs_file_write(&ctx->lfs, &f, msg, len);
+        if (ret < 0) kscprintf("echo: write err %d\r\n", ret);
+        lfs_file_close(&ctx->lfs, &f);
+        return ret;
+    }
+
+    if (app->output_fn) {
+        app->output_fn(msg, (uint32_t)len, app->output_ctx);
+        app->output_fn("\r\n", 2, app->output_ctx);
+    }
+    return (int)len;
 }
 
 static int cmd_fseek(app_t* app, const char** argv)
@@ -1131,6 +1166,7 @@ static int lfs_cmd(app_t* app, const char* cmdname, const char** argv)
         {"info",     cmd_info},
         {"ls",       cmd_ls},
         {"cat",      cmd_cat},
+        {"echo",     cmd_echo},
         {"feed",     cmd_feed},
         {"writenew", cmd_writenew},
         {"append",   cmd_append},

@@ -524,6 +524,32 @@ REGISTER_APP_EX("myapp", "0", NULL, &my_ops,
 - 命令行总长 ≤ 128B (`APPCMD_LINE_MAX`), 超出截断。
 - 优先用 `appcmd_argv` 跳过解析 (尤其在中断上下文或要传原始 argv 时)。
 
+### ⚠️ 易错提醒: 所有参数必须用 `-x value` 格式
+
+**错误写法（裸值被丢弃）**:
+```
+littlefs ls /           # ← / 被丢弃，实际 ls 了 CWD
+littlefs cat /test.txt  # ← 被丢弃，不起作用
+```
+
+**正确写法（用 -x flag）**:
+```
+littlefs ls -p /
+littlefs cat -p /test.txt
+```
+
+常见命令的 flag 约定:
+
+| flag | 含义 | 示例 |
+|------|------|------|
+| `-p` | 路径 | `ls -p /`, `cat -p /f`, `open -p /f` |
+| `-d` | 数据 (字符串) | `fwrite -d hello` |
+| `-f` | 打开标志 (hex) | `open -p /f -f 0x502` |
+| `-n` | 长度/数量 | `fread -n 64` |
+| `-m` | 消息 | `echo -m "hello world"` |
+
+> 从 terminal 发送命令时，可直接用 `echo xxx`（terminal 内建 `echo` 命令不经过 `appcmd` 解析，故 `-m` 可省略）。通过 `appcmd` 调用的 App 命令**必须**遵循 `-x value` 格式。
+
 ### 引用计数 / open-close 注意
 
 - `appget` 多次返回同一 `app_t*`, `get_refs` 累加; `appfree` 减。
