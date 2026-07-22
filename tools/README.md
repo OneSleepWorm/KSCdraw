@@ -68,13 +68,13 @@ python KSCOS/tools/monitor ping
 
 # 发命令到下位机（write 自动追加 \r\n；KSCOS appcmd 必须用 `-x value` 标志语法）
 python KSCOS/tools/monitor write "littlefs mount"
-python KSCOS/tools/monitor write "littlefs echo -m Hello -p /note.txt"   # 多 flag 用空格分隔
+python KSCOS/tools/monitor write "littlefs echo -d Hello -p /note.txt"   # 多 flag 用空格分隔
 python KSCOS/tools/monitor write --noeol "AT"             # 不追加 \r\n
 python KSCOS/tools/monitor write --hex "6c6974746c656673206c73"  # 输入 hex
 
 # 发命令并等待回应（--expect 可选；省略则收数据静默 200ms 后返回）
 python KSCOS/tools/monitor exchange "littlefs ls -p /" --timeout 3        # 无 expect，静默期退出
-python KSCOS/tools/monitor exchange "littlefs echo -m Probe" --expect Probe --timeout 3  # 匹配即返回
+python KSCOS/tools/monitor exchange "littlefs echo -d Probe" --expect Probe --timeout 3  # 匹配即返回
 python KSCOS/tools/monitor exchange --hex "4154" --expect "4f4b" --timeout 2  # hex 输入/hex 匹配
 
 # 实时流式显示下位机输出（Ctrl+C 停止，或 --timeout N 自动退出）
@@ -126,8 +126,8 @@ client ←TCP─ daemon ←─read-from-offset─ stdout.txt ←─append─ KSC
 
 KSCOS 的命令解析器要求严格的 `-x value` 标志语法：
 
-- ✅ `littlefs echo -m HelloWorld`
-- ✅ `littlefs echo -m Hello -p /note.txt`
+- ✅ `littlefs echo -d HelloWorld`
+- ✅ `littlefs echo -d Hello -p /note.txt`
 - ❌ `littlefs ls /` — 裸参会触发 `appcmd: unknown arg '/' (use -p for path?)` 警告
 - ✅ `littlefs ls -p /`
 
@@ -160,7 +160,7 @@ python KSCOS/tools/monitor write "littlefs format"
 python KSCOS/tools/monitor write "littlefs mount"
 
 # 5. 操作文件
-python KSCOS/tools/monitor write "littlefs echo -m Hello -p /note.txt"
+python KSCOS/tools/monitor write "littlefs echo -d Hello -p /note.txt"
 python KSCOS/tools/monitor write "littlefs cat -p /note.txt"
 python KSCOS/tools/monitor write "littlefs ls -p /"
 

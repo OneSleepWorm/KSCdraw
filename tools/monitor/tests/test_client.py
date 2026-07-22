@@ -155,7 +155,8 @@ def test_port_responds_true_when_daemon_up():
 def test_daemon_args_file_transport():
     args = Namespace(
         transport="file", port="COM6", baud=115200, poll_interval=50,
-        tcp_port=12345, idle=60, log="/tmp/serial.log", pid_file="/tmp/daemon.pid",
+        tcp_port=12345, idle=60, exchange_poll=0.001,
+        log="/tmp/serial.log", pid_file="/tmp/daemon.pid",
         cmd_path="/tmp/stdin.txt", out_path="/tmp/stdout.txt",
     )
     cmd = _daemon_args(args)
@@ -171,7 +172,8 @@ def test_daemon_args_file_transport():
 def test_daemon_args_serial_transport():
     args = Namespace(
         transport="serial", port="COM7", baud=9600, poll_interval=50,
-        tcp_port=12345, idle=60, log="/tmp/serial.log", pid_file="/tmp/daemon.pid",
+        tcp_port=12345, idle=60, exchange_poll=0.001,
+        log="/tmp/serial.log", pid_file="/tmp/daemon.pid",
         cmd_path="/tmp/stdin.txt", out_path="/tmp/stdout.txt",
     )
     cmd = _daemon_args(args)

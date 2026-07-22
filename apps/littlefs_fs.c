@@ -978,9 +978,9 @@ static int cmd_echo(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    if (!APPCMD_HAS(argv, 'm')) return -1;
+    if (!APPCMD_HAS(argv, 'd')) return -1;
 
-    const char* msg = argv[APPCMD_ARG('m')];
+    const char* msg = argv[APPCMD_ARG('d')];
     size_t len = strlen(msg);
 
     if (APPCMD_HAS(argv, 'p')) {
@@ -1157,6 +1157,32 @@ static int cmd_feed(app_t* app, const char** argv)
 
 /* --- dispatch --- */
 
+#if __USE_APP_HELP__
+static int cmd_help(app_t* app, const char** argv)
+{
+    (void)argv;
+    if (app->output_fn) {
+        const char* text =
+            "format mount unmount info\r\n"
+            "ls -p <path> [-n <max>]\r\n"
+            "cat -p <path> [-n <max>]\r\n"
+            "echo -d <text> [-p <path>]\r\n"
+            "feed -p <path> [-g]\r\n"
+            "writenew -p <path> [-d <text>]\r\n"
+            "append -p <path> [-d <text>]\r\n"
+            "rm -p <path>  mkdir -p <path>\r\n"
+            "mv -s <src> -d <dst>  stat -p <path>\r\n"
+            "cd -p <path>  pwd  whoami\r\n"
+            "su -u <user> [-p <pw>]\r\n"
+            "open -p <path> [-f <flags>]  close\r\n"
+            "fread [-n <max>]  fwrite [-d <text>]\r\n"
+            "fseek -o <offset> [-w <whence>]\r\n";
+        app->output_fn(text, strlen(text), app->output_ctx);
+    }
+    return 0;
+}
+#endif
+
 static int lfs_cmd(app_t* app, const char* cmdname, const char** argv)
 {
     static const lfs_cmd_entry_t table[] = {
@@ -1183,6 +1209,9 @@ static int lfs_cmd(app_t* app, const char* cmdname, const char** argv)
         {"fread",    cmd_fread},
         {"fwrite",   cmd_fwrite},
         {"fseek",    cmd_fseek},
+#if __USE_APP_HELP__
+        {"help",     cmd_help},
+#endif
         {NULL, NULL}
     };
     for (const lfs_cmd_entry_t* e = table; e->name; e++) {

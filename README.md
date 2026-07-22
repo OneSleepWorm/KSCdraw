@@ -548,12 +548,9 @@ littlefs cat -p /test.txt
 | flag | 含义 | 示例 |
 |------|------|------|
 | `-p` | 路径 | `ls -p /`, `cat -p /f`, `open -p /f` |
-| `-d` | 数据 (字符串) | `fwrite -d hello` |
+| `-d` | 数据 (字符串) | `fwrite -d hello`, `echo -d "hello world"` |
 | `-f` | 打开标志 (hex) | `open -p /f -f 0x502` |
 | `-n` | 长度/数量 | `fread -n 64` |
-| `-m` | 消息 | `echo -m "hello world"` |
-
-> 从 terminal 发送命令时，可直接用 `echo xxx`（terminal 内建 `echo` 命令不经过 `appcmd` 解析，故 `-m` 可省略）。通过 `appcmd` 调用的 App 命令**必须**遵循 `-x value` 格式。
 
 ### 引用计数 / open-close 注意
 

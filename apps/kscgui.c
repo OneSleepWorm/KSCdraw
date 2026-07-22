@@ -1168,6 +1168,49 @@ static int cmd_drawbmp(app_t* app, const char** argv)
  ================================================================ */
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } gui_appcmd_t;
 
+#if __USE_APP_HELP__
+static int cmd_help(app_t* app, const char** argv)
+{
+    (void)argv;
+    if (app->output_fn) {
+        const char* text =
+            "Drawing:\r\n"
+            "  pixel -x <x> -y <y> -c <color>\r\n"
+            "  fill -x <x> -y <y> -w <w> -h <h> -c <color>\r\n"
+            "  rect -x <x> -y <y> -w <w> -h <h> -c <color>\r\n"
+            "  line -x <x> -y <y> -w <w> -z <z> -c <color>\r\n"
+            "  char -x <x> -y <y> -v <ascii> -c <fg> [-b <bg>]\r\n"
+            "  string -x <x> -y <y> -s <text> -c <fg> [-b <bg>]\r\n"
+            "  circle -x <cx> -y <cy> -r <r> -c <color>\r\n"
+            "  fcircle -x <cx> -y <cy> -r <r> -c <color>\r\n"
+            "  arc -x <cx> -y <cy> -r <r> -d <dir> -c <color>\r\n"
+            "  rrect -x <x> -y <y> -w <w> -h <h> -r <r> -c <color>\r\n"
+            "  frrect -x <x> -y <y> -w <w> -h <h> -r <r> -c <color>\r\n"
+            "Tiles:\r\n"
+            "  wcreate -x <x> -y <y> -w <w> -h <h> -c <bg>\r\n"
+            "  wdelete -t <handle>  wselect -t <handle>\r\n"
+            "  whide -t <handle>  wshew -t <handle>\r\n"
+            "  wtoggle -t <handle>\r\n"
+            "  wmove -t <handle> -x <x> -y <y>\r\n"
+            "  wresize -t <handle> -w <w> -h <h>\r\n"
+            "  wbk -t <handle> -c <color>\r\n"
+            "  wzorder -t <handle> -z <z>\r\n"
+            "  wactive  winfo -t <handle>  wenum\r\n"
+            "  wclear -t <handle>  clear -c <color>\r\n"
+            "  setobjpool -t <handle> -n <count>\r\n"
+            "  getobjpool -t <handle>\r\n"
+            "  setdrawfunc -i <index>\r\n"
+            "Rendering:\r\n"
+            "  trenderall  tredraw -t <handle>  trender -t <handle>\r\n"
+            "Images:\r\n"
+            "  drawbmp  ibig -x <x> -y <y> -w <w> -h <h> -s <scale>\r\n"
+            "  ibin -x <x> -y <y> -w <w> -h <h> -c <fg> -b <bg>\r\n";
+        app->output_fn(text, strlen(text), app->output_ctx);
+    }
+    return 0;
+}
+#endif
+
 static const gui_appcmd_t gui_appcmds[] = {
     {"init",        cmd_init},
     {"pixel",       cmd_pixel},
@@ -1211,6 +1254,9 @@ static const gui_appcmd_t gui_appcmds[] = {
 #endif
     {"ibig",        cmd_ibig},
     {"ibin",        cmd_ibin},
+#if __USE_APP_HELP__
+    {"help",        cmd_help},
+#endif
     {NULL, NULL}
 };
 
