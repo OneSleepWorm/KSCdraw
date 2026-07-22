@@ -85,6 +85,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("start", parents=[parent], aliases=["open"])
     sub.add_parser("stop", parents=[parent], aliases=["close"])
 
+    p_tr = sub.add_parser("transfer", parents=[parent])
+    tr_sub = p_tr.add_subparsers(dest="transfer_cmd")
+    p_send = tr_sub.add_parser("send", parents=[parent])
+    p_send.add_argument("-l", "--local", required=True, help="local file path")
+    p_send.add_argument("-p", "--remote", required=True, help="remote path on littlefs")
+
     return ap
 
 

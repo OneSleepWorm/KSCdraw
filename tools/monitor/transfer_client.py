@@ -1,28 +1,18 @@
-#!/usr/bin/env python3
+"""transfer_client.py — XMODEM-128 file upload (monitor subcommand).
+
+Invoked as: python KSCOS/tools/monitor transfer send -l <local> -p <remote>
 """
-transfer.py — XMODEM file uploader to KSCOS
+from __future__ import annotations
 
-Connects to monitor.py daemon, sends file via XMODEM-128 protocol.
-
-Usage:
-  python transfer.py send -l local.bin -p /remote/path
-  python transfer.py send -l local.bin -p /remote/path --port 12345
-"""
-
-import sys
 import os
+import sys
 import time
-import json
-import socket
-import struct
-import argparse
 
-DEFAULT_TCP_PORT = 12345
+from client import _send_to_daemon
+
 XMODEM_SOH = 0x01
 XMODEM_EOT = 0x04
 XMODEM_ACK = 0x06
-XMODEM_NAK = 0x15
-XMODEM_CAN = 0x18
 PACKET_SIZE = 128
 MAX_RETRIES = 10
 TIMEOUT = 5.0
@@ -39,23 +29,6 @@ def crc16_ccitt(data: bytes) -> int:
                 crc <<= 1
         crc &= 0xFFFF
     return crc
-
-
-def daemon_send(obj, tcp_port, timeout=TIMEOUT):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    sock.connect(("127.0.0.1", tcp_port))
-    sock.sendall(json.dumps(obj).encode("utf-8"))
-    resp = b""
-    while True:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        resp += chunk
-        if b"\n" in resp:
-            break
-    sock.close()
-    return json.loads(resp.split(b"\n", 1)[0].decode("utf-8"))
 
 
 def xmodem_send(data: bytes, tcp_port: int) -> bool:
@@ -78,7 +51,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
 
         ok = False
         for retry in range(MAX_RETRIES):
-            resp = daemon_send({
+            resp = _send_to_daemon({
                 "cmd": "exchange",
                 "data": bytes(packet).hex(),
                 "hex": True,
@@ -104,7 +77,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
         seq = (seq + 1) & 0xFF
 
     for retry in range(MAX_RETRIES):
-        resp = daemon_send({
+        resp = _send_to_daemon({
             "cmd": "exchange",
             "data": bytes([XMODEM_EOT]).hex(),
             "hex": True,
@@ -133,19 +106,19 @@ def cmd_send(args):
     print(f"Uploading: {local_path} ({file_size} bytes)")
     print(f"  Remote: {remote_path}")
 
-    ping = daemon_send({"cmd": "ping"}, args.port)
+    ping = _send_to_daemon({"cmd": "ping"}, args.tcp_port, timeout=1.0)
     if ping.get("status") != "ok":
         print("Error: daemon not running", file=sys.stderr)
         sys.exit(1)
 
-    resp = daemon_send({
+    resp = _send_to_daemon({
         "cmd": "exchange",
         "data": f"transfer recv -p {remote_path} -n {file_size}",
         "hex": False,
         "noeol": False,
         "expect": "C",
         "timeout": 5.0,
-    }, args.port)
+    }, args.tcp_port)
 
     if resp.get("status") != "ok":
         print(f"Error: handshake failed: {resp}", file=sys.stderr)
@@ -154,25 +127,6 @@ def cmd_send(args):
     with open(local_path, "rb") as f:
         filedata = f.read()
 
-    success = xmodem_send(filedata, args.port)
+    success = xmodem_send(filedata, args.tcp_port)
     if not success:
         sys.exit(1)
-
-
-def main():
-    ap = argparse.ArgumentParser(description="transfer.py — XMODEM file upload to KSCOS")
-    ap.add_argument("--port", type=int, default=DEFAULT_TCP_PORT, help="daemon TCP port")
-    sub = ap.add_subparsers(dest="cmd")
-    p_send = sub.add_parser("send")
-    p_send.add_argument("-l", "--local", required=True, help="local file path")
-    p_send.add_argument("-p", "--remote", required=True, help="remote path on littlefs")
-    args = ap.parse_args()
-    if args.cmd == "send":
-        cmd_send(args)
-    else:
-        ap.print_help()
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()

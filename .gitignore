@@ -11,3 +11,5 @@ inc/SDL3
 master.c
 logs/
 *.log
+userdata/
+appdata/

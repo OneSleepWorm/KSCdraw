@@ -8,7 +8,6 @@
 ```
 tools/
 ├── README.md              本文档
-├── transfer.py             XMODEM-128 文件上传客户端
 ├── monitor/                daemon + CLI 客户端（IPC 通信框架）
 │   ├── __init__.py         包入口，导出 main()
 │   ├── __main__.py         `python monitor/ <cmd>` 直接运行时入口
@@ -16,7 +15,15 @@ tools/
 │   ├── client.py           _send_to_daemon / _ensure_daemon / _client_run
 │   ├── daemon.py           Daemon 类 + PID 管理 + log_entry + run_daemon
 │   ├── transport.py        Transport 抽象 + FileTransport + SerialTransport + MockTransport
+│   ├── transfer_client.py  XMODEM-128 文件上传（monitor transfer send）
 │   └── tests/              pytest 单元测试（50 个用例）
+├── imgconv/                BMP 转换工具（转换 + resize + 上传）
+│   ├── __init__.py         包入口
+│   ├── __main__.py         `python imgconv/ <cmd>` 直接运行时入口
+│   └── cli.py              argparse + 转换 + 上传逻辑
+├── userdata/               tools 默认读取路径（放图片等源文件）
+├── appdata/
+│   └── imgconv/            各工具默认输出路径（自动创建）
 └── logs/                   daemon 运行日志（自动生成）
     ├── serial.log          完整收发记录（含时间戳、tag、hex）
     ├── serial_user.log     仅下位机主动输出（去协议头、去转义）
@@ -73,6 +80,9 @@ python KSCOS/tools/monitor exchange --hex "4154" --expect "4f4b" --timeout 2  # 
 # 实时流式显示下位机输出（Ctrl+C 停止，或 --timeout N 自动退出）
 python KSCOS/tools/monitor monitor
 python KSCOS/tools/monitor monitor --timeout 4          # 4 秒后自动退出
+
+# 文件上传（XMODEM-128）
+python KSCOS/tools/monitor transfer send -l local.bmp -p /remote/path
 
 # 关闭 daemon（同时清空 stdin.txt + stdout.txt）
 python KSCOS/tools/monitor close
@@ -200,12 +210,28 @@ Daemon 全部协议分支 / `_send_to_daemon` 异常路径 / `_ensure_daemon` �
 
 ---
 
-## transfer.py
+## imgconv
 
-XMODEM-128 文件上传客户端。独立于 monitor 框架。
+BMP 转换工具。将常见图片格式（jpg/png/...）转换为 KSCOS 可显示的 24-bit BMP。
+
+- 自动比例缩放至不超过 `240×240`（drawbmp 限制）
+- 支持自定义尺寸、自定义输出路径
+- 支持一条命令完成转换 + 上传到 littlefs
 
 ```powershell
-python KSCOS/tools/transfer.py send <local_path> <remote_path>
+# 转换（自动缩放到 240 内，输出到 tools/appdata/imgconv/<name>.bmp）
+python KSCOS/tools/imgconv keli.jpg
+
+# 自定义尺寸
+python KSCOS/tools/imgconv keli.jpg -s 200x200
+
+# 转换 + 上传到 littlefs
+python KSCOS/tools/imgconv keli.jpg -u /home/keli.bmp
+
+# 绝对路径输入 + 自定义输出
+python KSCOS/tools/imgconv /path/to/photo.png -o out.bmp
 ```
 
-具体用法参考 `transfer.py --help`。
+**输入路径查找顺序：** 绝对路径 → CWD → `tools/userdata/`
+
+**依赖：** Pillow（PIL）。

@@ -210,6 +210,13 @@ def _client_run(args):
             args.tcp_port, timeout=sock_timeout))
     elif cmd == "monitor":
         _run_monitor(args)
+    elif cmd == "transfer":
+        if args.transfer_cmd == "send":
+            from transfer_client import cmd_send
+            cmd_send(args)
+        else:
+            print(json.dumps({"status": "error", "error": f"unknown transfer cmd: {args.transfer_cmd}"}))
+            sys.exit(1)
     else:
         print(json.dumps({"status": "error", "error": f"unknown cmd: {cmd}"}))
         sys.exit(1)
