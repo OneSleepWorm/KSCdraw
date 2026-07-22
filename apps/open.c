@@ -5,21 +5,6 @@
 
 #if __USE_STM32__ || __USE_PC__
 
-/* ── route table (old style, backward compat) ── */
-
-typedef struct {
-    const char* ext;
-    const char* src_app;
-    const char* subcmd;
-    const char* default_target;
-} open_route_t;
-
-static const open_route_t routes[] = {
-    {".txt", "littlefs", "feed", "uart"},
-    {".bmp", "littlefs", "feed", "gui"},
-    {NULL,   NULL,       NULL,   NULL}
-};
-
 /* ── "file" subcommand: open file and let GUI/app pull via appread ── */
 
 static int cmd_open_file(app_t* app, const char* cmdname, const char** argv)
@@ -43,9 +28,10 @@ static int cmd_open_file(app_t* app, const char* cmdname, const char** argv)
 
     if (strcmp(ext, ".bmp") == 0) {
         app_t* gui = appget("KSCGUI");
-        if (gui)
+        if (gui) {
+            appopen(gui);
             r = appcmd(gui, "drawbmp");
-        else
+        } else
             r = -1;
     } else {
         if (app->output_fn) {
@@ -76,56 +62,7 @@ static int open_cmd(app_t* app, const char* cmdname, const char** argv)
     if (strcmp(cmdname, "file") == 0)
         return cmd_open_file(app, cmdname, argv);
 
-    /* --- old route table (backward compat) --- */
-
-    const char* path = argv[APPCMD_ARG('p')];
-    if (!path) return -1;
-
-    const char* ext = strrchr(path, '.');
-    if (!ext) ext = "";
-
-    const open_route_t* route = NULL;
-    for (const open_route_t* r = routes; r->ext; r++) {
-        if (strcmp(ext, r->ext) == 0) { route = r; break; }
-    }
-
-    const char* src_name = route ? route->src_app : "littlefs";
-    const char* subcmd   = route ? route->subcmd : "info";
-    const char* def_tgt  = route ? route->default_target : "uart";
-
-    app_t* src = appget(src_name);
-    if (!src) return -1;
-
-    const char* tgt = NULL;
-    if (APPCMD_HAS(argv, 't')) {
-        tgt = argv[APPCMD_ARG('t')];
-    } else if (APPCMD_HAS(argv, 'g')) {
-        tgt = "gui";
-    } else if (APPCMD_HAS(argv, 'u')) {
-        tgt = "uart";
-    } else {
-        tgt = def_tgt;
-    }
-
-    const char* fwd_argv[28];
-    for (int i = 0; i < 26; i++)
-        fwd_argv[i] = argv[i];
-    fwd_argv[26] = NULL;
-    fwd_argv[27] = NULL;
-    fwd_argv[APPCMD_ARG('g')] = NULL;
-    fwd_argv[APPCMD_ARG('u')] = NULL;
-    fwd_argv[APPCMD_ARG('t')] = tgt;
-
-    app_output_fn saved_ofn = src->output_fn;
-    void* saved_octx = src->output_ctx;
-    src->output_fn = app->output_fn;
-    src->output_ctx = app->output_ctx;
-
-    int r = appcmd_argv(src, subcmd, fwd_argv);
-
-    src->output_fn = saved_ofn;
-    src->output_ctx = saved_octx;
-    return r;
+    return -1;
 }
 
 /* ── app lifecycle ── */

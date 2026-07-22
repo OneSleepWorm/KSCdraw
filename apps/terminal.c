@@ -93,6 +93,12 @@ static int term_dispatch(app_t* app, const char* cmdline)
 
         r = appcmd(target, rest);
 
+        if (r < 0) {
+            char b[48];
+            int n = snprintf(b, sizeof(b), "error: cmd returned %d\r\n", r);
+            if (n > 0) term_console_puts(ctx->console, b);
+        }
+
         target->user_data = saved_ud;
         target->output_fn = saved_ofn;
         target->output_ctx = saved_octx;
@@ -102,6 +108,9 @@ static int term_dispatch(app_t* app, const char* cmdline)
 
     app->user_data = NULL;
     app->mode_data = NULL;
+
+    uint8_t nul = 0;
+    appwrite(ctx->console, &nul, 1, 0x11);
     return r;
 }
 

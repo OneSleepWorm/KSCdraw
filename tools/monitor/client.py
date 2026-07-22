@@ -82,6 +82,7 @@ def _daemon_args(args) -> list:
         "--transport", str(args.transport),
         "--tcp-port", str(args.tcp_port),
         "--idle", str(args.idle),
+        "--exchange-poll", str(args.exchange_poll),
         "--log", str(args.log),
         "--pid-file", str(args.pid_file),
         "--cmd-path", str(args.cmd_path),
@@ -199,10 +200,6 @@ def _client_run(args):
              "noeol": getattr(args, "noeol", False)},
             args.tcp_port))
     elif cmd == "exchange":
-        if not args.expect:
-            print(json.dumps({"status": "error",
-                              "error": "exchange requires --expect"}))
-            sys.exit(1)
         data = " ".join(args.data)
         # 修旧 Bug 2：client socket timeout 比 exchange --timeout 多留余量
         sock_timeout = max(args.timeout + 5.0, 8.0)

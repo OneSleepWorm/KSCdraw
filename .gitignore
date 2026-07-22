@@ -9,5 +9,5 @@ src/*.o
 littlefs/*.o
 inc/SDL3
 master.c
-
+logs/
 *.log

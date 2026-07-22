@@ -187,7 +187,7 @@ class MockTransport(Transport):
     - read_available() 返回 inbox 中所有当前字节并清空
     - close() 是 no-op
     """
-    implements_async_read = True  # 让测试也走 reader 线程路径
+    implements_async_read = False  # 测试环境下不需要 reader 线程（避免与 exchange 抢 inbox）
 
     def __init__(self):
         self._lock = threading.Lock()

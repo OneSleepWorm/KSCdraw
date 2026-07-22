@@ -103,7 +103,8 @@ class Daemon:
 
     def __init__(self, transport: Transport, tcp_port: int,
                  log_path: str, user_log_path: str, pid_file: str,
-                 idle_timeout: int, transport_label: str = ""):
+                 idle_timeout: int, transport_label: str = "",
+                 exchange_poll_interval: float = 0.001):
         self.transport = transport
         self.tcp_port = tcp_port
         self.log_path = log_path
@@ -111,6 +112,7 @@ class Daemon:
         self.pid_file = pid_file
         self.idle_timeout = idle_timeout
         self.transport_label = transport_label
+        self.exchange_poll_interval = exchange_poll_interval
         self.stop = threading.Event()
 
     def start(self):
@@ -260,12 +262,9 @@ class Daemon:
             raw, tag = self._prepare(cmd["data"], hex_mode)
             if not cmd.get("noeol"):
                 raw += b"\r\n"
-            expect_str = cmd.get("expect")
-            if not expect_str:
-                self._send_json(conn, {"status": "error",
-                                        "error": "exchange needs --expect"})
-                return
+            expect_str = cmd.get("expect")   # None = 无 expect 模式
             timeout = cmd.get("timeout", 3.0)
+            QUIET = 0.2                      # 静默期 200ms：收到首帧后无新数据即返回
 
             self.transport.read_available()  # 丢旧数据 / 对齐 offset
             self.transport.write(raw)
@@ -274,19 +273,28 @@ class Daemon:
             collected = ""
             matched = ""
             end = time.time() + timeout
+            last_data_t = None               # 首帧时间戳
             while time.time() < end:
                 chunk = self.transport.read_available()
                 if chunk:
                     self._log("收", chunk)
                     s = chunk.hex() if hex_mode else chunk.decode("utf-8", errors="replace")
                     collected += s
-                    if expect_str in collected:
+                    last_data_t = time.time()
+                    if expect_str and expect_str in collected:
                         matched = expect_str
                         break
                 else:
-                    time.sleep(0.01)
+                    time.sleep(self.exchange_poll_interval)
+                    # 无 --expect 模式：收到过数据 + 静默期满 → 返回
+                    if not expect_str and last_data_t is not None:
+                        if time.time() - last_data_t >= QUIET:
+                            break
 
-            status = "ok" if matched else "timeout"
+            if expect_str:
+                status = "ok" if matched else "timeout"
+            else:
+                status = "ok" if collected else "timeout"
             self._send_json(conn, {
                 "status": status, "sent": len(raw),
                 "received": collected, "matched": matched,
@@ -346,6 +354,7 @@ def run_daemon(args):
             user_log_path=user_log_path,
             pid_file=args.pid_file,
             idle_timeout=args.idle,
+            exchange_poll_interval=args.exchange_poll,
             transport_label=args.transport,
         ).start()
     except Exception as e:

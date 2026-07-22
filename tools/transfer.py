@@ -62,6 +62,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
     seq = 1
     total = len(data)
     offset = 0
+    last_bucket = -1
 
     while offset < total:
         chunk = data[offset:offset + PACKET_SIZE]
@@ -86,7 +87,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
                 "timeout": TIMEOUT,
             }, tcp_port)
             received_hex = resp.get("received", "")
-            if received_hex.endswith("06"):
+            if bytes.fromhex(received_hex).rstrip(b"\0").hex().endswith("06"):
                 ok = True
                 break
         if not ok:
@@ -95,8 +96,11 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
 
         offset += PACKET_SIZE
         pct = int(offset / total * 100) if total else 100
-        sys.stdout.write(f"\r  Sent seq {seq} ({pct}%)")
-        sys.stdout.flush()
+        bucket = pct // 5
+        if bucket > last_bucket:
+            last_bucket = bucket
+            sys.stdout.write(f"\r  Sent seq {seq} ({bucket * 5}%)")
+            sys.stdout.flush()
         seq = (seq + 1) & 0xFF
 
     for retry in range(MAX_RETRIES):
@@ -109,7 +113,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
             "timeout": TIMEOUT,
         }, tcp_port)
         received_hex = resp.get("received", "")
-        if received_hex.endswith("06"):
+        if bytes.fromhex(received_hex).rstrip(b"\0").hex().endswith("06"):
             print("\n  Done.")
             return True
 

@@ -464,15 +464,20 @@ static void pc_uart_drain_stdin(pc_uart_ctx_t* ctx)
 
     fseek(ctx->stdin_fp, ctx->stdin_offset, SEEK_SET);
 
-    uint8_t c;
-    while (ftell(ctx->stdin_fp) < size) {
-        if (fread(&c, 1, 1, ctx->stdin_fp) != 1) break;
-        uint16_t next = (uint16_t)((ctx->rx_head + 1) & (PC_UART_RX_BUF_SIZE - 1));
-        if (next != ctx->rx_tail) {
-            ctx->rx_buf[ctx->rx_head] = c;
-            ctx->rx_head = next;
-        } else {
-            ctx->rx_overflow++;
+    long remaining = size - ctx->stdin_offset;
+    if (remaining > (long)sizeof(ctx->rx_buf)) remaining = (long)sizeof(ctx->rx_buf);
+    if (remaining > 0) {
+        uint8_t tmp[256];
+        if (remaining > (long)sizeof(tmp)) remaining = (long)sizeof(tmp);
+        int n = (int)fread(tmp, 1, (size_t)remaining, ctx->stdin_fp);
+        for (int i = 0; i < n; i++) {
+            uint16_t next = (uint16_t)((ctx->rx_head + 1) & (PC_UART_RX_BUF_SIZE - 1));
+            if (next != ctx->rx_tail) {
+                ctx->rx_buf[ctx->rx_head] = tmp[i];
+                ctx->rx_head = next;
+            } else {
+                ctx->rx_overflow++;
+            }
         }
     }
 

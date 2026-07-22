@@ -55,8 +55,13 @@ KSCOS/
 ├── master.c            # PC 入口 (gitignored, 本地开发者替换为自己的 main)
 ├── CMakeLists.txt      # KSCOS 子项目顶层 (PC 调试构建)
 ├── CMakePresets.json   # MinGW Makefiles / Ninja 预设
+├── .data/              # 运行时数据 — 见下方警告
 └── LICENSE             # MIT, © 2026 OneSleepWorm
 ```
+
+> **⚠️ 警告：`KSCOS/.data/` 是运行时持久化数据目录，包含 `flash.bin`（littlefs 文件系统镜像）。**
+> **任何清理脚本、测试流程、AI agent 都严禁删除或清空此目录及其文件。**
+> 删除 `flash.bin` = 销毁所有存储在 littlefs 上的用户文件。仅可在明确确认后手动操作。
 
 ---
 

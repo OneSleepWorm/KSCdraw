@@ -45,7 +45,7 @@ static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
     uint32_t written = 0;
 
     while (ctx->active) {
-        uint8_t rxbuf[64];
+        uint8_t rxbuf[128];
         int n = appread(uart, rxbuf, sizeof(rxbuf), 1);
         for (int i = 0; i < n; i++)
             xmodem_server_rx_byte(&ctx->xdm, rxbuf[i]);

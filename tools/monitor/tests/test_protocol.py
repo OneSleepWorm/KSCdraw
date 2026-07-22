@@ -137,11 +137,33 @@ def test_daemon_exchange_timeout(mock_daemon):
     assert r["matched"] == ""
 
 
-def test_daemon_exchange_no_expect_returns_error(mock_daemon):
+def test_daemon_exchange_no_expect_no_data_timeout(mock_daemon):
+    """无 --expect + 无数据 → timeout。"""
     d, port = mock_daemon
-    r = _send(port, {"cmd": "exchange", "data": "AT"})
-    assert r["status"] == "error"
-    assert "expect" in r["error"]
+    r = _send(port, {"cmd": "exchange", "data": "AT", "timeout": 0.5})
+    assert r["status"] == "timeout"
+    assert r["matched"] == ""
+    assert r["received"] == ""
+
+
+def test_daemon_exchange_no_expect_quiet_period(mock_daemon):
+    """无 --expect + 有数据 → 收到首帧后静默 200ms 返回 ok。
+
+    注入两帧（间隔 100ms），第二帧也应被收集。
+    """
+    d, port = mock_daemon
+
+    def staggered_inject():
+        time.sleep(0.1)
+        d.transport.inject(b"line1\r\n")
+        time.sleep(0.1)
+        d.transport.inject(b"line2\r\n")
+    threading.Thread(target=staggered_inject, daemon=True).start()
+    r = _send(port, {"cmd": "exchange", "data": "AT", "timeout": 3.0})
+    assert r["status"] == "ok"
+    assert r["matched"] == ""
+    assert "line1" in r["received"]
+    assert "line2" in r["received"]
 
 
 def test_daemon_unknown_command(mock_daemon):

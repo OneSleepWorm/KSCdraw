@@ -46,7 +46,7 @@ tools/
 |---|---|---|---|
 | `file` (默认) | 本地文件 IO (`.data/stdin.txt` & `stdout.txt`) | PC 端与 `KSCOS.exe` 通信 | 否 |
 | `serial` | pyserial | 真机与 STM32 通信 | 是（捕获 MCU 自发数据） |
-| `mock` | 内存 `bytearray` | 单元测试 | 是 |
+| `mock` | 内存 `bytearray` | 单元测试 | 否 |
 
 ### 命令一览
 
@@ -65,12 +65,14 @@ python KSCOS/tools/monitor write "littlefs echo -m Hello -p /note.txt"   # 多 f
 python KSCOS/tools/monitor write --noeol "AT"             # 不追加 \r\n
 python KSCOS/tools/monitor write --hex "6c6974746c656673206c73"  # 输入 hex
 
-# 阻塞等待下位机回应（需 --expect 指定匹配字符串）
-python KSCOS/tools/monitor exchange "littlefs echo -m Probe" --expect Probe --timeout 3
+# 发命令并等待回应（--expect 可选；省略则收数据静默 200ms 后返回）
+python KSCOS/tools/monitor exchange "littlefs ls -p /" --timeout 3        # 无 expect，静默期退出
+python KSCOS/tools/monitor exchange "littlefs echo -m Probe" --expect Probe --timeout 3  # 匹配即返回
 python KSCOS/tools/monitor exchange --hex "4154" --expect "4f4b" --timeout 2  # hex 输入/hex 匹配
 
-# 实时流式显示下位机输出（Ctrl+C 停止）
+# 实时流式显示下位机输出（Ctrl+C 停止，或 --timeout N 自动退出）
 python KSCOS/tools/monitor monitor
+python KSCOS/tools/monitor monitor --timeout 4          # 4 秒后自动退出
 
 # 关闭 daemon（同时清空 stdin.txt + stdout.txt）
 python KSCOS/tools/monitor close
@@ -107,6 +109,8 @@ client ←TCP─ daemon ←─read-from-offset─ stdout.txt ←─append─ KSC
 | `KSCOS/.data/stdin.txt` | daemon → KSCOS 命令流（daemon append，KSCOS read + truncate） |
 | `KSCOS/.data/stdout.txt` | KSCOS → daemon 输出流（KSCOS append，daemon 读偏移跟到文件尾） |
 | `KSCOS/.data/flash.bin` | littlefs 持久镜像（跨会话保留，**不**随 daemon close 清空） |
+
+> **⚠️ 严禁删除或清空 `.data/` 下的任何文件。** `flash.bin` 是用户数据持久存储，删除 = 丢失所有文件。
 
 #### KSCOS 命令格式（appcmd）
 

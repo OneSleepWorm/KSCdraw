@@ -40,6 +40,8 @@ def _add_transport_args(p, include_data_paths: bool = False):
     p.add_argument("--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL_MS)
     p.add_argument("--tcp-port", type=int, default=DEFAULT_TCP_PORT)
     p.add_argument("--idle", type=int, default=DEFAULT_IDLE)
+    p.add_argument("--exchange-poll", type=float, default=0.001,
+                   help="exchange 轮询间隔（秒），默认 0.001")
     p.add_argument("--log", default=DEFAULT_LOG)
     p.add_argument("--pid-file", default=DEFAULT_PID_FILE)
     p.add_argument("--daemon", action="store_true", help=argparse.SUPPRESS)
@@ -71,7 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ex.add_argument("data", nargs="+")
     p_ex.add_argument("--hex", action="store_true")
     p_ex.add_argument("--noeol", action="store_true")
-    p_ex.add_argument("--expect", required=True)
+    p_ex.add_argument("--expect", default=None,
+                       help="等待回应中出现的子串；省略则收到数据静默 200ms 后返回")
     p_ex.add_argument("--timeout", type=float, default=3.0)
 
     p_mon = sub.add_parser("monitor", parents=[parent])
