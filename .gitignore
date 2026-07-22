@@ -13,3 +13,4 @@ logs/
 *.log
 userdata/
 appdata/
+__pycache__/

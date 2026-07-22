@@ -30,7 +30,7 @@
 #define __LITTLE_END_COLOR__ 1
 //程序配置
 #define __USE_TEXT__ 1
-#define __USE_APP_HELP__ 1   // per-app help 子命令 (littlefs/KSCGUI)
+#define __USE_APP_HELP__ 0   // per-app help 子命令 (开则显著增加 .rodata，Flash 不够时关掉)
 
 #define COLORBIT 2
 #define COLORBYTE 2
