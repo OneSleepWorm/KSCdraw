@@ -3,6 +3,10 @@
 
 #include "KSCconfig.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #if __USE_LCD__ ==1
 void screen_init(void* data);
 void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num);
@@ -134,6 +138,10 @@ KSC_mes kstring(k_draw_device* dev,KSC_window* screen,const char* str,uintxy x,u
 #if __USE_CHINESE__ >0
 // 绘制中文字符串
 KSC_mes kstringchinese(k_draw_device* dev,KSC_window* screen,const char* str,uintxy x,uintxy y,KSCCOLOR color1,KSCCOLOR color2);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

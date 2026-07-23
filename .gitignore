@@ -14,3 +14,6 @@ logs/
 userdata/
 appdata/
 __pycache__/
+*.py[cod]
+AGENTS.md
+*.jlink

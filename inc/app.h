@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef void* (*void_func_t)(void*);
 typedef int (*app_output_fn)(const void* data, uint32_t len, void* ctx);
 
@@ -74,5 +78,9 @@ int    appread(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appwrite(app_t* app, void* data, uint32_t count, uint32_t mode);
 int    appcmd(app_t* app, const char* cmdline);
 int    appcmd_argv(app_t* app, const char* cmdname, const char** argv);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -6,6 +6,10 @@
 #include "app.h"
 #include <stdarg.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define KSCOS_LOW_CLOCK 0
 #define KSCOS_NORMAL_CLOCK 1
 #define KSCOS_HIGH_CLOCK 2
@@ -33,5 +37,9 @@ void osfree(void* ptr);
 void* oscalloc(size_t num, size_t size);
 
 void sys_init(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

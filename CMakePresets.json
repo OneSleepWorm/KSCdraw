@@ -2,25 +2,7 @@
   "version": 3,
   "configurePresets": [
     {
-      "name": "MinGW Makefiles",
-      "generator": "MinGW Makefiles",
-      "binaryDir": "${sourceDir}/build_make",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
-      }
-    },
-    {
-      "name": "MinGW Ninja",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build_ninja",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
-      }
-    },
-    {
-      "name": "Debug",
+      "name": "PC Debug",
       "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build_debug",
       "cacheVariables": {
@@ -28,12 +10,60 @@
       }
     },
     {
-      "name": "Release",
+      "name": "PC Release",
       "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build_release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "Firmware-Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Debug",
+      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "STM32_FIRMWARE": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Firmware-Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Release",
+      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "STM32_FIRMWARE": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "Firmware-Release-RONLY",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Release-RONLY",
+      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "STM32_FIRMWARE": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "LFS_READONLY": "ON"
+      }
+    },
+    {
+      "name": "Firmware-Debug-RONLY",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Debug-RONLY",
+      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "STM32_FIRMWARE": "ON",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LFS_READONLY": "ON"
+      }
     }
+  ],
+  "buildPresets": [
+    { "name": "Firmware-Debug", "configurePreset": "Firmware-Debug" },
+    { "name": "Firmware-Release", "configurePreset": "Firmware-Release" },
+    { "name": "Firmware-Release-RONLY", "configurePreset": "Firmware-Release-RONLY" },
+    { "name": "Firmware-Debug-RONLY", "configurePreset": "Firmware-Debug-RONLY" }
   ]
 }

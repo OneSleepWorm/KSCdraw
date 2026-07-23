@@ -24,6 +24,7 @@ KSCOS/
 │   ├── UTF8_FlashN.h
 │   └── master.h         # PC demo 工程总头
 ├── src/                # 框架核心实现
+│   ├── main.c           # 统一入口 (PC / STM32)
 │   ├── app.c            # appget / appopen / appclose / appread / appwrite / appcmd / appfree
 │   ├── KSCOSsystem.c    # PLL / SysTick / osmalloc / kscprintf / sys_init
 │   ├── KSCdraw.c        # k_draw_device + 对象 draw_table + 基本绘图
@@ -43,18 +44,27 @@ KSCOS/
 │   ├── littlefs_fs.c    # littlefs on W25Q64
 │   ├── terminal.c       # 字符串路由分发器
 │   ├── open.c           # 按扩展名路由文件打开
-│   └── upload.c         # (未完成) PC ↔ 板端文件传输
+│   └── transfer.c       # XMODEM-128 文件上传
+├── cmake/
+│   └── gcc-arm-none-eabi.cmake   # arm-none-eabi 工具链配置
 ├── third_party/
 │   ├── easyx/           # 仅 PC: 静态库 libeasyx.a + graphics.h
 │   ├── littlefs/        # littlefs 源 (lfs.c / lfs_util.c / lfs_config.h)
-│   ├── stm32/           # STM32 HAL 桩 (仅含需要的 TIM/SPI 子集)
+│   ├── stm32/           # CMSIS 头 + 启动汇编 + 链接脚本 + 系统源文件
+│   │   ├── inc/CMSIS/        # core_cm3.h 等 Cortex-M3 内核头
+│   │   ├── inc/CMSIS_Device/ # stm32f1xx.h, stm32f103xb.h 设备寄存器定义
+│   │   ├── startup/          # startup_stm32f103xb.s
+│   │   ├── src/              # system_stm32f1xx.c, syscalls.c, sysmem.c, stm32f1xx_it.c
+│   │   └── STM32F103XX_FLASH.ld  # 链接脚本
+│   ├── async_xmodem/   # XMODEM 接收端 (transfer app)
 │   └── tjpgd3/          # JPEG 解码
 ├── examples/           # 早期独立 App 示例 (basicdraw/terminal_demo/...)
 ├── docs/
 │   └── KSCGUI_API.md   # KSCGUI 详细命令参考
-├── master.c            # PC 入口 (gitignored, 本地开发者替换为自己的 main)
-├── CMakeLists.txt      # KSCOS 子项目顶层 (PC 调试构建)
-├── CMakePresets.json   # MinGW Makefiles / Ninja 预设
+├── flash_debug.jlink   # JLink 烧录脚本
+├── CMakeLists.txt      # 统一 CMake 入口 (PC / STM32)
+├── CMakePresets.json   # 构建预设 (PC Debug/Release, Firmware Debug/Release)
+├── build/              # 构建输出 (gitignored)
 ├── .data/              # 运行时数据 — 见下方警告
 └── LICENSE             # MIT, © 2026 OneSleepWorm
 ```
@@ -87,53 +97,63 @@ KSCOS/
 | `__USE_CLOCK_TASK__` | 1 | 系统时钟与 tick 任务 |
 | `__LITTLE_END_COLOR__` | 1 | 颜色字节序 (ST7789 16-bit 工作于小端) |
 
-PC 子项目 (`src/CMakeLists.txt`) 会强制覆盖:
-```cmake
-target_compile_definitions(KSCOS_SRC PUBLIC __USE_AUTO__=1 __USE_PC__=1 __USE_STM32__=0)
-```
+PC 构建时由 `CMakePresets.json` 注入 `__USE_PC__=1`，STM32 固件通过 `STM32_FIRMWARE=ON` 注入 `__USE_STM32__=1 STM32F103xB`。
 
 ---
 
 ## 构建
 
-### PC 调试构建
+KSCOS 支持统一 CMake 入口，通过预设切换 PC 调试与 STM32 固件构建。
 
-KSCOS 自身可作为独立 PC 工程编译（用于在没有硬件时验证 App 框架与 KSCdraw 算法）。依赖 MinGW + easyx（`third_party/easyx/libeasyx.a` 已随仓提供，仅作为 PC 平台下的 `k_draw_device` 实现）。
+### STM32 固件构建
+
+依赖 `arm-none-eabi-gcc`（GNU Arm Embedded Toolchain）和 Ninja。
 
 ```sh
-# 在 KSCOS/ 目录下
-cmake --preset "MinGW Ninja"
-cmake --build --preset "MinGW Ninja"
-# 产物: build_ninja/KSCOS.exe (链接 master.c, 跑 PC demo)
+cd KSCOS/
+
+# Debug 构建
+cmake --preset Firmware-Debug && cmake --build --preset Firmware-Debug
+
+# Release 构建
+cmake --preset Firmware-Release && cmake --build --preset Firmware-Release
+
+# 产物: build/Release/KSCOS.elf
 ```
 
-其它预设: `Debug` / `Release` (MinGW Makefiles)、`MinGW Ninja`。
+烧录（JLink + SWD）：
 
-### STM32 嵌入式目标
-
-把 `apps/*.c` 与 `src/*.c` 加入 STM32 固件工程的源文件列表，在编译选项中设 `__USE_STM32__=1`，并把 `apps/CMakeLists.txt` 的 `target_sources` 模式照写到目标可执行文件上；其余文件（如链接脚本、启动汇编、CMSIS 头）由宿主工程自行提供。具体示例：
-
-```cmake
-# 宿主 STM32 固件工程的 CMakeLists.txt 片段
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE __USE_STM32__=1)
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    ${KSCOS_DIR}/apps/gpio_port.c
-    ${KSCOS_DIR}/apps/uart_serial.c
-    # ... 按需列出其它 App
-)
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${KSCOS_DIR}/inc
-    ${KSCOS_DIR}/apps
-)
+```sh
+& "D:\SEGGER\JLink_V924a\JLink.exe" -autoconnect 1 -commanderscript flash_debug.jlink
 ```
 
-可执行文件的链接脚本必须定义以下三个 section boundary (KSCOS 用它们扫描 `app_table` 段)：
+`flash_debug.jlink` 执行擦除 → 加载 → 复位 → 运行。也可手动指定：
 
 ```
-.start_papp_table / .stop_papp_table   (或 __start_papp_table / __stop_papp_table)
+device STM32F103C8 / si SWD / speed 4000 / connect / erase / loadfile ./build/Release/KSCOS.elf / reset / go
 ```
 
-烧录方式、串口监控、测试脚本等由宿主工程自行决定；KSCOS 不绑定具体的烧录器或 IDE。
+### PC 调试构建
+
+依赖 MinGW + easyx（`third_party/easyx/libeasyx.a` 已随仓提供）。用于在没有硬件时验证 App 框架与 KSCdraw 算法。
+
+```sh
+cd KSCOS/
+
+cmake --preset "PC Debug" && cmake --build --preset "PC Debug"
+# 产物: build_debug/KSCOS.exe
+```
+
+### 预设一览
+
+| 预设 | 目标 | 生成器 | 工具链 |
+|------|------|--------|--------|
+| `PC Debug` | PC 调试 | MinGW Makefiles | gcc/g++ |
+| `PC Release` | PC 发布 | MinGW Makefiles | gcc/g++ |
+| `Firmware-Debug` | STM32 调试 ( -Os -g3 ) | Ninja | arm-none-eabi-gcc |
+| `Firmware-Release` | STM32 发布 ( -Os -g0 ) | Ninja | arm-none-eabi-gcc |
+| `Firmware-Debug-RONLY` | STM32 调试 + littlefs 只读 | Ninja | arm-none-eabi-gcc |
+| `Firmware-Release-RONLY` | STM32 发布 + littlefs 只读 | Ninja | arm-none-eabi-gcc |
 
 ---
 
@@ -430,7 +450,7 @@ typedef struct ksc_obj_t {
 | `littlefs` | `w25qxx_base` | PC+STM32 | littlefs 文件系统: 一次性 (`writenew`/`append`/`cat`/`ls`/`rm`/`mkdir`/`mv`/`stat`) + 持久 fd (`open`/`close`/`fread`/`fwrite`/`fseek`) | `littlefs_fs.c` |
 | `terminal` | — | PC+STM32 | 字符串路由分发器: UART RX → 攒行 → 按 `appname subcmd -x v` 路由到 `appget` 目标; 内建 `help`/`echo` | `terminal.c` |
 | `open` | `littlefs` | PC+STM32 | 按扩展名路由文件打开 (`.txt` → uart, `.bmp` → gui) | `open.c` |
-| `upload` | `littlefs` | STM32(未完成) | PC ↔ 板端文件传输 | `upload.c` |
+| `transfer` | `uart_serial` + `littlefs` | STM32 | XMODEM-128 文件上传到 littlefs | `transfer.c` |
 
 跨 App 共享类型 (常量 / 结构) 定义在 `apps/app_config.h`:
 - `SSPI_MODE(spi_inst, dev_id, op)` / `SSPI_XFER_INST(i)` — super_spi mode 编码宏
@@ -573,7 +593,7 @@ littlefs cat -p /test.txt
 | easyx | `third_party/easyx/` (libeasyx.a + graphics.h) | PC 平台 `k_draw_device` 屏呈现 | SDL2 / raylib / 自绘后端 |
 | littlefs | `third_party/littlefs/` | `littlefs` App 的 FS 实现 | FatFS / 自实现 FS |
 | tjpgd3 | `third_party/tjpgd3/` | JPEG 解码支持 | stb_image / libjpeg-turbo |
-| STM32 HAL 桩 | `third_party/stm32/` (仅 TIM/SPI 子集) | `uart_serial` / `super_spi` / `tim_clock` 等所需寄存器宏头 | 完整 CubeMX HAL / LL 库 / 裸 CMSIS |
+| STM32 CMSIS + 启动 | `third_party/stm32/` (CMSIS 头 + 启动汇编 + 链接脚本 + 系统源) | 寄存器宏定义、中断向量表、newlib 系统调用桩 | 完整 CubeMX HAL / LL 库 / 裸 CMSIS |
 
 > KSCOS 框架核心 (`src/app.c`、`src/KSCOSsystem.c`、`src/KSCdraw.c`) 仅依赖 libc 与 CMSIS (`stm32f1xx.h`) — 所有外设操作在 App 内部直接读写寄存器，不依赖 HAL 中间件。
 
