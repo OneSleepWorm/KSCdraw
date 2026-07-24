@@ -86,7 +86,7 @@ app_t* appget(const char* name)
         app->app2        = NULL;
         app->app3        = NULL;
         app->app_ops     = papp->ops;
-        app->callback    = CALLBACK_NULL_FUNC;
+        app->user_func    = CALLBACK_NULL_FUNC;
         app->output_fn   = NULL;
         app->output_ctx  = NULL;
         app->app_data    = NULL;

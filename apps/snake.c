@@ -411,7 +411,7 @@ static int snake_init(app_t* app, int mode)
     show_initial(ctx);
 
     /* TIM4: mode=0x41 设周期, mode=0x42 count=1 启动 */
-    ctx->tim->callback  = tick_cb;
+    ctx->tim->user_func  = tick_cb;
     ctx->tim->user_data = app;
     appopen(ctx->tim);
     appwrite(ctx->tim, NULL, TICK_MS, 0x41);

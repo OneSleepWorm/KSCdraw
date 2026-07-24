@@ -498,63 +498,12 @@ appcmd(list, "refresh");              /* 重绘 */
 
 ---
 
-## ctrl_list
-
-> 方向键列表控件，由 `button16` 事件 + `tim_clock` 轮询驱动 `list` 选中变化，把 CONFIRM/QUIT 上抛给用户 callback。
-
-### `app_dep` 实际链条
-
-ctrl_list 注册 `app_dep: "2\0list\0button16"`，且**还需要 `tim_clock`**——在 `start` 时通过 `appget("tim_clock")` 抓取，用于 50ms 定期读 button16 事件队列。
-
-### callback 协议
-
-```c
-typedef void (*ctrl_event_cb_t)(void* user_data, int event);
-
-#define CTRL_EVENT_CONFIRM  0   /* 按 OK 键 → 当前选中项 idx */
-#define CTRL_EVENT_QUIT     1   /* 按 QUIT 键 */
-```
-
-注册方式：`app->callback = (void_func_t)my_cb;` + `app->user_data = my_ctx;`
-
-### `appcmd` 命令
-
-| 命令 | 参数 | 说明 |
-|------|------|------|
-| `init` | — | 分配 ctrl_ctx_t |
-| `bind` | `-l <list_app>` (可选) `-k <up,down,ok,quit>` (可选) | 绑定子 App 与按键映射；默认按键 `{up=6, down=14, ok=10, quit=0}` |
-| `start` | — | 启动 tim_clock 周期扫描 (50ms, HOLD_TICKS=10, HOLD_GAP=4) |
-| `stop` | — | 停止扫描 |
-
-### 用法
-
-```c
-app_t* ctrl = appget("ctrl_list");
-appopen(ctrl);
-
-/* 复用已有 list 实例 */
-appcmd(ctrl, "bind -l list");
-
-/* 注册事件 callback */
-ctrl_event_cb_t cb = my_on_select;   /* void my_on_select(void* ctx, int ev) */
-app->callback = (void_func_t)cb;
-app->user_data = my_ctx;
-
-appcmd(ctrl, "start");
-
-/* idle loop 自旋，按键由 tim_clock 中断驱动 */
-
-/* 退出时: */
-appcmd(ctrl, "stop");
-appclose(ctrl);
-```
-
 ### 默认按键 (计算器布局)
 
 ```
-[5] [6] [7]        →   上方向 (整排上)
+    [6]        →   上方向 
 [9]    [11]        →   左 / 右
-[13] [14] [15]     →   下方向 (整排下)
+    [14]      →   下方向 
 [10] 暂停/确认        [0] 退出
 ```
 
@@ -583,9 +532,9 @@ appclose(ctrl);
 ### 按键映射
 
 ```
-[5] [6] [7]   上方向 (整排)
+    [6]        →   上方向 
 [9]    [11]  ← / →
-[13] [14] [15]  下方向
+    [14]      →   下方向 
 [10] 暂停     [0] 退出 → 回到 main loop
 ```
 
@@ -795,16 +744,6 @@ GUI (drawbmp) → appread(open, buf, n) → open_read
 | `.bmp` | `littlefs open` → `appcmd(KSCGUI, "drawbmp")` → GUI 内部 `appread(open)` 拉数据 → 解码 → `kdrawimage` 渲染 |
 | `.txt` / 其他 | `littlefs open` → 循环 `fread` → `output_fn` 推送 |
 
-### 旧行为 (向后兼容)
-
-旧 `open open -p /path` 形式仍可用。走路由表转发 `argv` 到 `littlefs feed`，行为不变。
-
-| 扩展名 | 源 App | subcmd | 默认目标 |
-|--------|--------|--------|---------|
-| `.txt` | `littlefs` | `feed` | `uart` |
-| `.bmp` | `littlefs` | `feed` | `gui` |
-| 其它 | `littlefs` | `info` | `uart` |
-
 ### 用例
 
 ```c
@@ -812,10 +751,6 @@ GUI (drawbmp) → appread(open, buf, n) → open_read
 appcmd(open_app, "file -p /notes.txt");            /* → output_fn 推送 */
 appcmd(open_app, "file -p /photo.bmp");            /* → GUI drawbmp */
 
-/* 旧形式 (向后兼容) */
-appcmd(open_app, "open -p /notes.txt");            /* → uart via feed */
-appcmd(open_app, "open -p /photo.bmp -g");         /* → gui via feed */
-appcmd(open_app, "open -p /data.bin -u");          /* → uart 强制 */
 ```
 
 ---
@@ -882,4 +817,3 @@ KSCOS 的设计准则是：**框架核心 (`inc/app.h` + `src/app.c` + `src/KSCO
 | tjpgd3 | JPEG 解码 | stb_image / libjpeg-turbo |
 | STM32 HAL 桩 (`third_party/stm32/`) | `uart_serial` / `super_spi` / `tim_clock` 所需寄存器宏 | CubeMX HAL / LL 库 / 裸 CMSIS |
 
-KSCOS 框架核心仅依赖 libc + CMSIS 寄存器宏，所有外设操作在 App 内部直接读写寄存器。

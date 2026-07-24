@@ -42,7 +42,7 @@
  * ============================================================
  * 回调 — RX 数据到达通知
  * ============================================================
- *   app->callback = on_rx;
+ *   app->user_func = on_rx;
  *   app->user_data = my_ctx;
  *   // ISR 中环空→非空时回调一次 (中断上下文)
  *
@@ -413,8 +413,8 @@ static void uart_irq_handler(int idx)
             } else {
                 r->overflow++;
             }
-            if (was_empty && app->callback)
-                app->callback(app->user_data);
+            if (was_empty && app->user_func)
+                app->user_func(app->user_data);
         }
     }
 }

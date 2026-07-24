@@ -14,7 +14,7 @@
  * 使用方法
  * ============================================================
  *   app_t* t = appget("tim_clock");
- *   t->callback = my_cb;
+ *   t->user_func = my_cb;
  *   t->user_data = my_ud;
  *   appopen(t);
  *   appwrite(t, NULL, 250, 0x41);   // TIM1, 设置周期
@@ -88,7 +88,7 @@ static void inst_init(app_t* app, tim_ctx_t* ctx, uint8_t inst)
     uint8_t bit = (uint8_t)(1 << (inst - 1));
     if (ctx->enabled & bit) return;
 
-    ctx->cb[inst - 1] = app->callback;
+    ctx->cb[inst - 1] = app->user_func;
     ctx->ud[inst - 1] = app->user_data;
 
     rcc_enable(inst);
@@ -373,7 +373,7 @@ static int tim_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 
     case 2:
         if (count) {
-            ctx->cb[i] = app->callback;
+            ctx->cb[i] = app->user_func;
             ctx->ud[i] = app->user_data;
             ctx->running[i] = 1;
             ctx->counter[i] = 0;
@@ -428,7 +428,7 @@ static int cmd_regcb(app_t* app, const char** argv)
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
     if (inst < 1 || inst > 4) return -1;
     int i = (int)(inst - 1);
-    ctx->cb[i] = app->callback;
+    ctx->cb[i] = app->user_func;
     ctx->ud[i] = app->user_data;
     ctx->running[i] = 1;
     if (!ctx->thread_run) {
@@ -458,7 +458,7 @@ static int cmd_start(app_t* app, const char** argv)
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
     if (inst < 1 || inst > 4) return -1;
     int i = (int)(inst - 1);
-    ctx->cb[i] = app->callback;
+    ctx->cb[i] = app->user_func;
     ctx->ud[i] = app->user_data;
     ctx->running[i] = 1;
     ctx->counter[i] = 0;

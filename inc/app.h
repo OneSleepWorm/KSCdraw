@@ -47,7 +47,7 @@ typedef struct app_t {
     struct app_t*       app2;
     struct app_t*       app3;
     const papp_ops_t*   app_ops;
-    void_func_t         callback;
+    void_func_t         user_func;
     app_output_fn       output_fn;
     void*               output_ctx;
     void*               app_data;

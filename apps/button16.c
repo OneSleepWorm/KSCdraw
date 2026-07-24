@@ -342,7 +342,7 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     if (mode == 2 && !d->timer_started && data && count == 1) {
         d->interval_ms = *(uint32_t*)data;
         app_t* tim = appget("tim_clock");
-        tim->callback  = scan_cb;
+        tim->user_func  = scan_cb;
         tim->user_data = app;
         appopen(tim);
         appwrite(tim, NULL, d->interval_ms, 0x31);
@@ -412,7 +412,7 @@ static int cmd_scan(app_t* app, const char** argv)
     if (ms < 10) return -1;
     app_t* tim = appget("tim_clock");
     d->interval_ms = ms;
-    tim->callback = scan_cb;
+    tim->user_func = scan_cb;
     tim->user_data = app;
     appopen(tim);
     appwrite(tim, NULL, d->interval_ms, 0x31);

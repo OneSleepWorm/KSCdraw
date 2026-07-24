@@ -29,7 +29,6 @@
 #define __BUTTON_SIMU__ 1
 #define __LITTLE_END_COLOR__ 1
 //程序配置
-#define __USE_TEXT__ 1
 #define __USE_APP_HELP__ 0   // per-app help 子命令 (开则显著增加 .rodata，Flash 不够时关掉)
 #define __USE_LITTLEFS_READONLY__ 0 // littlefs 读写控制: 1=只读(排除写操作, 缩小固件)
 
@@ -84,6 +83,7 @@ typedef int16_t ki16;
 #define co(color) (((color)&0xFF)<<8)|((color)&0xFF00)
 #endif
 
+#if 0
 // 颜色配置:大端模式
 #if __LITTLE_END_COLOR__ == 0
 #define rred 0xF100
@@ -101,6 +101,6 @@ typedef int16_t ki16;
 #define wwhite 0xFFFF
 #define yyellow 0xE0FF
 #endif
-
+#endif
 
 #endif

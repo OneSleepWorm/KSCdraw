@@ -37,8 +37,8 @@
  *   --- 选中 ---
  *   appcmd(list, "select -i idx")          -> 选中指定项
  *   appcmd(list, "move -d delta")          -> [+1/-1] 移动选中
- *   appcmd(list, "confirm")                -> 触发 callback
- *   选中变化时自动调用 app->callback(app->user_data)
+ *   appcmd(list, "confirm")                -> 触发 user_func
+ *   选中变化时自动调用 app->user_func(app->user_data)
  *
  *   --- 查询 ---
  *   appcmd(list, "getcount")               -> int 返回值
@@ -87,7 +87,7 @@
  * ============================================================
  *
  *   app_t* list = appget("list");
- *   list->callback = my_cb;
+ *   list->user_func = my_cb;
  *   list->user_data = my_ctx;
  *   appopen(list);
  *
@@ -433,8 +433,8 @@ static int do_select(list_ctx_t* ctx, uint8_t idx)
         }
     }
 
-    if (ctx->app && ctx->app->callback)
-        ctx->app->callback(ctx->app->user_data);
+    if (ctx->app && ctx->app->user_func)
+        ctx->app->user_func(ctx->app->user_data);
 
     return 0;
 }
@@ -542,7 +542,7 @@ static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
         { uint32_t iv = ctx->ctrl_interval_ms; appwrite(ctx->kpd, &iv, 1, 2); }
         { uint32_t enable = 1; appwrite(ctx->kpd, &enable, 1, 4); }
         { uint32_t p[2] = {CTRL_HOLD_TICKS, CTRL_HOLD_GAP}; appwrite(ctx->kpd, p, 2, 5); }
-        ctx->tim->callback = list_tick_cb;
+        ctx->tim->user_func = list_tick_cb;
         ctx->tim->user_data = app;
         appopen(ctx->tim);
         appwrite(ctx->tim, NULL, ctx->ctrl_interval_ms, 0x41);
@@ -603,8 +603,8 @@ static int cmd_select(app_t* app, list_ctx_t* ctx, const char** argv)
 static int cmd_confirm(app_t* app, list_ctx_t* ctx, const char** argv)
 {
     (void)app; (void)argv;
-    if (ctx->app && ctx->app->callback)
-        ctx->app->callback(ctx->app->user_data);
+    if (ctx->app && ctx->app->user_func)
+        ctx->app->user_func(ctx->app->user_data);
     return 1;
 }
 
@@ -803,6 +803,6 @@ static const papp_ops_t list_ops = {
 };
 
 REGISTER_APP_EX("list", NULL, "1\0KSCGUI",
-                &list_ops, "GUI list widget (256B pool, frag mgmt, callback)");
+                &list_ops, "GUI list widget (256B pool, frag mgmt, user_func)");
 
 #endif

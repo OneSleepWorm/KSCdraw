@@ -22,42 +22,41 @@ KSCOS/
 │   ├── KSCfont.h        # 字体数据接口
 │   ├── KSCimg.h         # 图像数据接口
 │   ├── UTF8_FlashN.h
-│   └── master.h         # PC demo 工程总头
 ├── src/                # 框架核心实现
-│   ├── main.c           # 统一入口 (PC / STM32)
-│   ├── app.c            # appget / appopen / appclose / appread / appwrite / appcmd / appfree
+│   ├── main.c           # 统一主函数入口 (PC / STM32)
+│   ├── app.c            # app系列函数
 │   ├── KSCOSsystem.c    # PLL / SysTick / osmalloc / kscprintf / sys_init
 │   ├── KSCdraw.c        # k_draw_device + 对象 draw_table + 基本绘图
 │   ├── KSCfont.c
 │   └── KSCimg.c
 ├── apps/               # 应用模块 (每个 .c 一个 REGISTER_APP)
-│   ├── app_config.h     # 跨 App 共享类型 (sspi_mode_t / tile_h_t / list_colors_t / ...)
+│   ├── app_config.h     # 跨 App 共享类型 
 │   ├── gpio_port.c      # GPIO 直操寄存器
 │   ├── uart_serial.c    # USART1/2/3
 │   ├── tim_clock.c      # TIM1-4
 │   ├── button16.c       # 4×4 矩阵键盘
 │   ├── super_spi.c      # 统一 SPI1+SPI2 主控
-│   ├── kscgui.c         # GUI Tile 合成器 + ST7789
+│   ├── kscgui.c         # GUI 组件库
 │   ├── list.c           # GUI 列表 widget (含内置键盘控制)
 │   ├── snake.c          # Snake 游戏 (中断驱动)
 │   ├── w25qxx_base.c    # W25Q64 SPI NOR Flash
 │   ├── littlefs_fs.c    # littlefs on W25Q64
 │   ├── terminal.c       # 字符串路由分发器
-│   ├── open.c           # 按扩展名路由文件打开
+│   ├── open.c           # 按扩展名路由文件打开 (txt,bmp)
 │   └── transfer.c       # XMODEM-128 文件上传
 ├── cmake/
 │   └── gcc-arm-none-eabi.cmake   # arm-none-eabi 工具链配置
 ├── third_party/
-│   ├── easyx/           # 仅 PC: 静态库 libeasyx.a + graphics.h
+│   ├── easyx/           # PC端gui窗口实现: 静态库 libeasyx.a + graphics.h
 │   ├── littlefs/        # littlefs 源 (lfs.c / lfs_util.c / lfs_config.h)
 │   ├── stm32/           # CMSIS 头 + 启动汇编 + 链接脚本 + 系统源文件
 │   │   ├── inc/CMSIS/        # core_cm3.h 等 Cortex-M3 内核头
 │   │   ├── inc/CMSIS_Device/ # stm32f1xx.h, stm32f103xb.h 设备寄存器定义
 │   │   ├── startup/          # startup_stm32f103xb.s
-│   │   ├── src/              # system_stm32f1xx.c, syscalls.c, sysmem.c, stm32f1xx_it.c
+│   │   ├── src/              
 │   │   └── STM32F103XX_FLASH.ld  # 链接脚本
 │   ├── async_xmodem/   # XMODEM 接收端 (transfer app)
-│   └── tjpgd3/          # JPEG 解码
+│   └── tjpgd3/          # JPEG 解码（暂无实现）
 ├── examples/           
 ├── docs/
 │   └── api/            # API 参考
@@ -80,22 +79,15 @@ KSCOS/
 ```c
 #define __USE_PC__     0   /* 三选一: 1 = PC 调试目标 */
 #define __USE_STM32__  1   /* 三选一: 1 = STM32 嵌入式目标 */
-#define __USE_ESP32__  0   /* 三选一: 1 = ESP32 目标 (预留) */
+#define __USE_ESP32__  0   /* 三选一: 1 = ESP32 目标 (暂未实现) */
 ```
 
 | 开关 | 默认 | 作用 |
 |------|------|------|
 | `__USE_LCD__` | 1 | 启用 KSCdraw / 屏幕输出 |
-| `__USE_ST7789__` / `__USE_ST7735__` | ST7789 | 屏驱动选择 |
-| `__USE_FLASH__` | 1 | W25Q64 + littlefs |
-| `__USE_LITTLEFS__` | 1 | 文件系统 |
-| `__USE_UART__` | 0 | UART 串口 (默认关闭, sys_init 仍会启用 USART1 控制台) |
-| `__USE_KEY__` | 0 | 键盘输入 |
-| `__USE_TEXT__` | 1 | 字符渲染 |
+| `__USE_ST7789__` / `__USE_ST7735__` | 屏驱动选择 |
 | `__USE_CHINESE__` | 0 | 中文字符串渲染 |
 | `__DRAW_CIRCLE__` | 1 | 圆形 / 圆弧 / 圆角矩形 API |
-| `__USE_CLOCK_TASK__` | 1 | 系统时钟与 tick 任务 |
-| `__LITTLE_END_COLOR__` | 1 | 颜色字节序 (ST7789 16-bit 工作于小端) |
 
 PC 构建时由 `CMakePresets.json` 注入 `__USE_PC__=1`，STM32 固件通过 `STM32_FIRMWARE=ON` 注入 `__USE_STM32__=1 STM32F103xB`。
 
@@ -172,9 +164,9 @@ app_t (runtime, osmalloc)
 ├── app0..app3  -> 依赖的 app_t*  (由 app_dep_str 递归 appget 填充)
 ├── callback    void_func_t           事件回调
 ├── output_fn / output_ctx            输出重定向 (流式回调)
-├── app_data    void*                 App 自有上下文 (open 时分配)
-├── user_data   void*                 调用方数据指针 (appcmd 输入/输出)
-├── callback_data  void*              持久句柄 (文件 fd / tile handle)
+├── app_data    void*                 App运行时上下文数据
+├── user_data   void*                 调用方数据指针 
+├── callback_data  void*              返回数据指针 
 └── mode_data  void*                  当前模式缓存
 ```
 
@@ -303,21 +295,14 @@ mode = (inst << 4) | op
 ### Hello-World 示例
 
 ```c
-app_t* spi = appget("super_spi");
-appopen(spi);
-
-int tft1 = appcmd(spi, "reg -i 1");     /* SPI1 上注册一个设备, 返回 dev_id */
-/* sspi_setpin 等价于: */
-appcmd_argv(spi, "setpin", (const char*[]){NULL,NULL,"1", /*-i*/
-                                            NULL, NULL, /*-d*/ _itoa_of(tft1),
-                                            NULL,"0",   /*-s SSPI_CS*/
-                                            NULL,"4"}); /*-p PA4 */
-
-uint8_t cmd = 0x11;
-appwrite(spi, &cmd, 1, SSPI_MODE(1, tft1, SSPI_SEND_CMD));
-
-const uint8_t frame[1024] = {...};
-appwrite(spi, (void*)frame, 1024, SSPI_MODE(1, tft1, SSPI_SEND_DAT_DMA));
+    sys_init();
+    app_t* term = appget("terminal");
+    if (term) appopen(term);
+ while (1) {
+     uint8_t c;
+     while (appread(ksc_console, &c, 1, 1) > 0)
+        appwrite(term, &c, 1, 0);
+     }
 ```
 
 ---
@@ -331,7 +316,7 @@ appwrite(spi, (void*)frame, 1024, SSPI_MODE(1, tft1, SSPI_SEND_DAT_DMA));
 | `sysgettime()` | 返回 `sys_tick_ms` (开机毫秒计数) |
 | `osmalloc(size)` / `osfree(p)` / `oscalloc(n,sz)` | 框架内统一堆接口, STM32 上为 libc `malloc/calloc/free` |
 | `kscprintf(fmt, ...)` | 通过 `ksc_console` 输出格式化串 (含 `vsnprintf`, buffer 128B) |
-| `KSCOSSystemClock_Init(t)` / `KSCOS_Error_Handler()` | 时钟类型设置 (当前实现空操作, 真正时钟在 `pll_init`) 与错误死循环 |
+
 | `ksc_console` | 全局 `app_t*`, 由 sys_init 指向 `uart_serial` 实例 1 |
 
 ### 强制规则: 所有运行期上下文必须 osmalloc
@@ -598,8 +583,7 @@ littlefs cat -p /test.txt
 
 ## 文档
 
-- **`docs/KSCGUI_API.md`** — KSCGUI 详细 appcmd 命令参考 (Tile 管理 / 图元 / 渲染)。注意: 该文档部分 (如 `app_dep` 字符串) 还停留在旧版双 SPI 描述, 以 `kscgui.c` 中的 `REGISTER_APP_EX` 实际值为准。
-- **`examples/api/`** — 完整 API 契约文档 (`app_framework.md` / `appcmd.md` / `system.md` / `kscdraw.md` / `apps.md`), 见 `examples/api/README.md` 文档地图。
+- **`docs/api/`** — 完整 API 契约文档 (`app_framework.md` / `appcmd.md` / `system.md` / `kscdraw.md` / `apps.md`), 见 `examples/api/README.md` 文档地图。
 
 ---
 
