@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import Optional
 
 from .base import ProgrammerBackend
 
@@ -45,11 +44,14 @@ class JLinkBackend(ProgrammerBackend):
             ["JLinkExe", "-autoconnect", "1"],
             input=script,
             capture_output=True,
-            text=True,
         )
-        print(proc.stdout)
+        if proc.stdout:
+            sys.stdout.buffer.write(proc.stdout)
+            sys.stdout.flush()
         if proc.returncode != 0:
-            print(proc.stderr, file=sys.stderr)
+            if proc.stderr:
+                sys.stderr.buffer.write(proc.stderr)
+                sys.stderr.flush()
             raise RuntimeError(f"JLinkExe failed (rc={proc.returncode})")
 
     def flash(self, elf_path: str, *, verify: bool = True) -> None:

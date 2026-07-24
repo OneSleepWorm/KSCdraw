@@ -14,8 +14,6 @@ _PRESETS_FILE = os.path.join(_PROJECT_DIR, "CMakePresets.json")
 _FIRMWARE_PRESETS = {
     "Firmware-Debug",
     "Firmware-Release",
-    "Firmware-Debug-RONLY",
-    "Firmware-Release-RONLY",
 }
 _PC_PRESETS = {"PC Debug", "PC Release"}
 
@@ -45,10 +43,6 @@ def build(preset_name: str) -> str:
     binary_dir = _resolve_binary_dir(preset_name)
     exe_path = os.path.join(binary_dir, _exe_name(preset_name))
 
-    if os.path.isfile(exe_path):
-        print(f"  binary already exists: {exe_path}")
-        return exe_path
-
     cfg = subprocess.run(
         ["cmake", "--preset", preset_name],
         cwd=_PROJECT_DIR,
@@ -58,6 +52,8 @@ def build(preset_name: str) -> str:
         print(cfg.stdout)
         print(cfg.stderr, file=sys.stderr)
         raise RuntimeError(f"cmake --preset {preset_name!r} failed")
+    if cfg.stderr:
+        print(cfg.stderr, file=sys.stderr)
 
     bld = subprocess.run(
         ["cmake", "--build", "--preset", preset_name],
@@ -65,6 +61,8 @@ def build(preset_name: str) -> str:
         capture_output=True, text=True,
     )
     print(bld.stdout)
+    if bld.stderr:
+        print(bld.stderr, file=sys.stderr)
     if bld.returncode != 0:
         print(bld.stderr, file=sys.stderr)
         raise RuntimeError(f"cmake --build --preset {preset_name!r} failed")

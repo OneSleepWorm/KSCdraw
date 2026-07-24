@@ -17,3 +17,4 @@ __pycache__/
 *.py[cod]
 AGENTS.md
 *.jlink
+tools/programmer/backend/stutil.json

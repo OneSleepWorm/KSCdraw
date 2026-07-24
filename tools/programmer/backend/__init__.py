@@ -3,11 +3,13 @@ from .jlink import JLinkBackend
 from .openocd import OpenOCDBackend
 from .pyocd import PyOCDBackend
 from .stlink import STLinkBackend
+from .stutil import STLinkUtilityBackend
 
 _BACKENDS = [
-    JLinkBackend,
-    OpenOCDBackend,
     PyOCDBackend,
+    STLinkUtilityBackend,
+    OpenOCDBackend,
+    JLinkBackend,
     STLinkBackend,
 ]
 

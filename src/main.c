@@ -5,7 +5,7 @@ int main(void)
 {
     sys_init();
 
-    kscprintf("=== KSCOS start ===\r\n");
+    kscprintf("=== KSCOS start stutil2===\r\n");
 
     app_t* gpio = appget("gpio_port");
     if (gpio) {

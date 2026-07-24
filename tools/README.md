@@ -235,3 +235,67 @@ python KSCOS/tools/imgconv /path/to/photo.png -o out.bmp
 **输入路径查找顺序：** 绝对路径 → CWD → `tools/userdata/`
 
 **依赖：** Pillow（PIL）。
+
+---
+
+## programmer
+
+统一烧录工具。将 CMake 构建 + 固件烧录 + 复位合并为一条命令，自动检测可用后端。
+
+### 依赖
+
+| 后端 | 命令 | 安装方式 |
+|------|------|---------|
+| pyOCD **(默认)** | `--backend pyocd` | `pip install pyocd` + `pyocd pack install stm32f103c8`（首次下载较慢） |
+| ST-LINK Utility CLI | `--backend stutil` | 安装 ST-LINK Utility，编辑 `backend/stutil.json` 填入安装目录路径 |
+| OpenOCD | `--backend openocd` | 安装 OpenOCD 并加入 PATH |
+| SEGGER JLinkExe | `--backend jlink` | 安装 JLink 驱动 |
+| STM32_Programmer_CLI | `--backend stlink` | 安装 STM32CubeProgrammer 并加入 PATH |
+
+### 用法
+
+```powershell
+# 列出可用后端
+python KSCOS/tools/programmer list-backends
+
+# 构建 + 烧写（自动选择第一个可用后端）
+python KSCOS/tools/programmer flash --preset Firmware-Debug
+
+# 指定后端
+python KSCOS/tools/programmer flash --preset Firmware-Debug --backend stutil
+
+# 跳过构建，直接烧写已有 .elf
+python KSCOS/tools/programmer flash --elf build/Debug/KSCOS.elf --backend stutil
+
+# 跳过 verify
+python KSCOS/tools/programmer flash --preset Firmware-Debug --no-verify
+
+# 仅复位
+python KSCOS/tools/programmer reset --backend stutil
+```
+
+### 后端发现顺序
+
+自动检测命中第一个可用后端：pyOCD → stutil → openocd → jlink → stlink。
+
+### 后端配置
+
+#### stutil
+
+工具首次运行时自动在 `backend/stutil.json` 生成空配置。编辑该文件填入 ST-LINK Utility 安装路径即可：
+
+```json
+{
+    "path": "C:\\Program Files (x86)\\STMicroelectronics\\STM32 ST-LINK Utility\\ST-LINK Utility"
+}
+```
+
+也可将 `ST-LINK_CLI.exe` 所在目录加入 PATH，或设环境变量 `ST_LINK_CLI` 指向 exe 路径。
+
+#### pyOCD
+
+首次使用需安装 pack（仅一次）：
+
+```powershell
+pyocd pack install stm32f103c8
+```

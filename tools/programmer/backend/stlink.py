@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import Optional
 
 from .base import ProgrammerBackend
 
@@ -15,6 +14,20 @@ class STLinkBackend(ProgrammerBackend):
     def available(cls) -> bool:
         return cls._which("STM32_Programmer_CLI") is not None
 
+    @staticmethod
+    def _run_cmd(cmd: list[str]) -> None:
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.stdout:
+            sys.stdout.buffer.write(proc.stdout)
+            sys.stdout.flush()
+        if proc.returncode != 0:
+            if proc.stderr:
+                sys.stderr.buffer.write(proc.stderr)
+                sys.stderr.flush()
+            raise RuntimeError(
+                f"STM32_Programmer_CLI failed (rc={proc.returncode})"
+            )
+
     def flash(self, elf_path: str, *, verify: bool = True) -> None:
         cmd = [
             "STM32_Programmer_CLI",
@@ -23,14 +36,7 @@ class STLinkBackend(ProgrammerBackend):
             "0x08000000",
             "-rst",
         ]
-        print(f"  STM32_Programmer_CLI: {' '.join(cmd)}")
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        print(proc.stdout)
-        if proc.returncode != 0:
-            print(proc.stderr, file=sys.stderr)
-            raise RuntimeError(
-                f"STM32_Programmer_CLI failed (rc={proc.returncode})"
-            )
+        self._run_cmd(cmd)
 
     def reset(self) -> None:
         cmd = [
@@ -38,10 +44,4 @@ class STLinkBackend(ProgrammerBackend):
             "-c", "port=SWD",
             "-rst",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        print(proc.stdout)
-        if proc.returncode != 0:
-            print(proc.stderr, file=sys.stderr)
-            raise RuntimeError(
-                f"STM32_Programmer_CLI failed (rc={proc.returncode})"
-            )
+        self._run_cmd(cmd)

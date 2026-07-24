@@ -16,6 +16,11 @@ if(STM32_FIRMWARE)
         -T "${CMAKE_CURRENT_SOURCE_DIR}/third_party/stm32/STM32F103XX_FLASH.ld"
         -Wl,-Map=${PROJECT_NAME}.map -Wl,--gc-sections -Wl,--print-memory-usage -flto)
 
+    add_custom_command(TARGET KSCOS POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary "$<TARGET_FILE:KSCOS>" "$<TARGET_FILE_DIR:KSCOS>/${PROJECT_NAME}.bin"
+        COMMENT "Generating ${PROJECT_NAME}.bin"
+    )
+
     target_sources(KSCOS PRIVATE
         third_party/stm32/startup/startup_stm32f103xb.s
         third_party/stm32/src/system_stm32f1xx.c
@@ -50,7 +55,7 @@ endif()
 # === 共享选项 ===
 target_compile_definitions(KSCOS PRIVATE LFS_NO_ASSERT)
 # 强制注入 KSCconfig.h 到所有编译单元 (使 lfs.c 等第三方文件能读到 __USE_LITTLEFS_READONLY__)
-target_compile_options(KSCOS PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/inc/KSCconfig.h")
+target_compile_options(KSCOS PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-include;${CMAKE_CURRENT_SOURCE_DIR}/inc/KSCconfig.h>")
 
 set_target_properties(KSCOS PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

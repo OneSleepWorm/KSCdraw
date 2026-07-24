@@ -40,6 +40,8 @@
 #define MAX_INPUT_SIZE 255
 #define _STATICBUF_SIZE 512
 
+// littlefs 读写控制: 1=只读(排除写操作, 缩小固件)
+#define __USE_LITTLEFS_READONLY__ 0
 #if __USE_LITTLEFS_READONLY__
 #define LFS_READONLY
 #endif
