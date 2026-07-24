@@ -35,6 +35,8 @@ uint32_t sysgettime(void);
 void* osmalloc(size_t size);
 void osfree(void* ptr);
 void* oscalloc(size_t num, size_t size);
+void osdelay(uint32_t ms);
+
 
 void sys_init(void);
 

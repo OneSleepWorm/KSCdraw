@@ -9,6 +9,7 @@
 void* osmalloc(size_t size) { return malloc(size); }
 void osfree(void* ptr) { free(ptr); }
 void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
+void osdelay(uint32_t ms) { sysdelay(ms); }
 
 ki8 KSCOS_default_Error_Handler(void* data)
 {

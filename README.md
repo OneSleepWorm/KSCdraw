@@ -58,9 +58,9 @@ KSCOS/
 │   │   └── STM32F103XX_FLASH.ld  # 链接脚本
 │   ├── async_xmodem/   # XMODEM 接收端 (transfer app)
 │   └── tjpgd3/          # JPEG 解码
-├── examples/           # 早期独立 App 示例 (basicdraw/terminal_demo/...)
+├── examples/           
 ├── docs/
-│   └── KSCGUI_API.md   # KSCGUI 详细命令参考
+│   └── api/            # API 参考
 ├── flash_debug.jlink   # JLink 烧录脚本
 ├── CMakeLists.txt      # 统一 CMake 入口 (PC / STM32)
 ├── CMakePresets.json   # 构建预设 (PC Debug/Release, Firmware Debug/Release)
