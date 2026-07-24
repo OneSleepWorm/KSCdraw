@@ -111,8 +111,9 @@
 #if __USE_STM32__ || __USE_PC__
 
 /* ── littlefs 配置 ──
- * LFS_READONLY 由 CMakeLists.txt 的 option() 控制 (默认 OFF), 
- * 不在源文件中定义, 否则 #ifndef LFS_READONLY 检查会失效.
+ * LFS_READONLY 由 KSCconfig.h 的 __USE_LITTLEFS_READONLY__ 控制.
+ * CMakeLists.txt 通过 -include 强制注入 KSCconfig.h 到所有编译单元,
+ * 使 third_party/littlefs/lfs.c 也能读到该宏.
  */
 
 /* ---- 底层块设备接口 (委托到 w25qxx_base) ---- */

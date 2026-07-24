@@ -49,6 +49,8 @@ endif()
 
 # === 共享选项 ===
 target_compile_definitions(KSCOS PRIVATE LFS_NO_ASSERT)
+# 强制注入 KSCconfig.h 到所有编译单元 (使 lfs.c 等第三方文件能读到 __USE_LITTLEFS_READONLY__)
+target_compile_options(KSCOS PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/inc/KSCconfig.h")
 
 set_target_properties(KSCOS PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

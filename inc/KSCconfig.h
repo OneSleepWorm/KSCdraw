@@ -31,6 +31,7 @@
 //程序配置
 #define __USE_TEXT__ 1
 #define __USE_APP_HELP__ 0   // per-app help 子命令 (开则显著增加 .rodata，Flash 不够时关掉)
+#define __USE_LITTLEFS_READONLY__ 0 // littlefs 读写控制: 1=只读(排除写操作, 缩小固件)
 
 #define COLORBIT 2
 #define COLORBYTE 2
@@ -39,6 +40,10 @@
 #define TFTy 160
 #define MAX_INPUT_SIZE 255
 #define _STATICBUF_SIZE 512
+
+#if __USE_LITTLEFS_READONLY__
+#define LFS_READONLY
+#endif
 #include <stdint.h>
 #define uintxy uint16_t
 #define intxy int16_t

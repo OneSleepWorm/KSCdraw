@@ -152,9 +152,6 @@ cmake --preset "PC Debug" && cmake --build --preset "PC Debug"
 | `PC Release` | PC 发布 | MinGW Makefiles | gcc/g++ |
 | `Firmware-Debug` | STM32 调试 ( -Os -g3 ) | Ninja | arm-none-eabi-gcc |
 | `Firmware-Release` | STM32 发布 ( -Os -g0 ) | Ninja | arm-none-eabi-gcc |
-| `Firmware-Debug-RONLY` | STM32 调试 + littlefs 只读 | Ninja | arm-none-eabi-gcc |
-| `Firmware-Release-RONLY` | STM32 发布 + littlefs 只读 | Ninja | arm-none-eabi-gcc |
-
 ---
 
 ## 核心架构: App 框架

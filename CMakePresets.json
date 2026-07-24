@@ -36,34 +36,10 @@
         "STM32_FIRMWARE": "ON",
         "CMAKE_BUILD_TYPE": "Release"
       }
-    },
-    {
-      "name": "Firmware-Release-RONLY",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Release-RONLY",
-      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
-      "cacheVariables": {
-        "STM32_FIRMWARE": "ON",
-        "CMAKE_BUILD_TYPE": "Release",
-        "LFS_READONLY": "ON"
-      }
-    },
-    {
-      "name": "Firmware-Debug-RONLY",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Debug-RONLY",
-      "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
-      "cacheVariables": {
-        "STM32_FIRMWARE": "ON",
-        "CMAKE_BUILD_TYPE": "Debug",
-        "LFS_READONLY": "ON"
-      }
     }
   ],
   "buildPresets": [
     { "name": "Firmware-Debug", "configurePreset": "Firmware-Debug" },
-    { "name": "Firmware-Release", "configurePreset": "Firmware-Release" },
-    { "name": "Firmware-Release-RONLY", "configurePreset": "Firmware-Release-RONLY" },
-    { "name": "Firmware-Debug-RONLY", "configurePreset": "Firmware-Debug-RONLY" }
+    { "name": "Firmware-Release", "configurePreset": "Firmware-Release" }
   ]
 }
