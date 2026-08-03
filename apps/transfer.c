@@ -13,7 +13,7 @@ static void transfer_tx_byte(struct xmodem_server *xdm, uint8_t byte, void *cb_d
     app_t* app = (app_t*)cb_data;
     transfer_ctx_t* ctx = (transfer_ctx_t*)app->app_data;
     if (ctx && ctx->uart)
-        appwrite(ctx->uart, &byte, 1, 0x11);
+        appwrite(ctx->uart, &byte, 1, 0);
 }
 
 static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
@@ -57,13 +57,13 @@ static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
             uint32_t towrite = (uint32_t)rlen;
             if (file_size > 0 && written + towrite > file_size)
                 towrite = file_size - written;
-            lfs->user_data = pkt;
+            lfs->input_data = pkt;
             char wn[12];
             snprintf(wn, sizeof(wn), "%lu", (unsigned long)towrite);
             const char* fa[26] = {0};
             fa[APPCMD_ARG('n')] = wn;
             int wr = appcmd_argv(lfs, "fwrite", fa);
-            lfs->user_data = NULL;
+            lfs->input_data = NULL;
             if (wr < 0) {
                 ctx->active = 0;
                 return -1;

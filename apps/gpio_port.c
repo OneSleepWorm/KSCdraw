@@ -107,7 +107,7 @@ static int gpio_app_open(app_t* app)
     ctx->enabled_ports = 0;
     ctx->rd_val = 0;
     app->app_data = ctx;
-    app->callback_data = &ctx->rd_val;
+    app->output_data = &ctx->rd_val;
     return 0;
 }
 
@@ -115,7 +115,7 @@ static int gpio_app_close(app_t* app)
 {
     if (app->app_data) osfree(app->app_data);
     app->app_data = NULL;
-    app->callback_data = NULL;
+    app->output_data = NULL;
     return 0;
 }
 
@@ -272,7 +272,7 @@ static int gpio_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
  *   appcmd(gpio, "cfg -p 4 -m 3");      // PA4 推挽输出 50MHz
  *   appcmd(gpio, "set -p 4 -v 1");      // PA4 = HIGH
  *   appcmd(gpio, "tog -p 4");            // PA4 翻转
- *   appcmd(gpio, "rd -p 4");            // 读 PA4 → callback_data
+ *   appcmd(gpio, "rd -p 4");            // 读 PA4 → output_data
  * ================================================================ */
 
 static int cmd_cfg(app_t* app, const char** argv)
@@ -325,7 +325,7 @@ static int cmd_tog(app_t* app, const char** argv)
     return 1;
 }
 
-/* rd: 读引脚电平 — -p pin, 结果存 callback_data */
+/* rd: 读引脚电平 — -p pin, 结果存 output_data */
 static int cmd_rd(app_t* app, const char** argv)
 {
     gpio_ctx_t* ctx = (gpio_ctx_t*)app->app_data;
@@ -336,8 +336,8 @@ static int cmd_rd(app_t* app, const char** argv)
     GPIO_TypeDef* gpio = port_reg(port);
     if (!gpio) return -1;
     rcc_lazy(ctx, port);
-    if (app->callback_data)
-        *(uint32_t*)app->callback_data = (gpio->IDR >> local) & 1;
+    if (app->output_data)
+        *(uint32_t*)app->output_data = (gpio->IDR >> local) & 1;
     return 1;
 }
 
@@ -349,7 +349,7 @@ static const gpio_cmd_t gpio_cmds[] = {
     {"cfg", cmd_cfg},   /* 配置引脚模式  -p pin -m nibble */
     {"set", cmd_set},   /* 置/复位引脚  -p pin -v 0/1 */
     {"tog", cmd_tog},   /* 翻转引脚     -p pin */
-    {"rd",  cmd_rd},    /* 读引脚电平   -p pin → callback_data */
+    {"rd",  cmd_rd},    /* 读引脚电平   -p pin → output_data */
     {NULL, NULL}
 };
 

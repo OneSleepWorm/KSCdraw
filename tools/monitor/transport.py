@@ -46,6 +46,16 @@ class Transport(ABC):
     def clear_data(self) -> None:
         """清空底层存储。默认不实现。"""
 
+    def set_paused(self, paused: bool) -> None:
+        """暂停/恢复后台 reader 消费底层数据。
+
+        仅 async transport（如串口）需要。默认 no-op：file/mock 模式
+        的 read_available 是请求-响应语义，daemon 没有后台 reader。
+        """
+
+    def is_paused(self) -> bool:
+        return False
+
 
 def make_transport(transport_type: str, **kwargs) -> "Transport":
     """工厂函数。"""
@@ -158,6 +168,7 @@ class SerialTransport(Transport):
         self.ser.reset_input_buffer()
         self.ser.reset_output_buffer()
         self._lock = threading.Lock()
+        self._paused = False
         self.port = port
         self.baud = baud
 
@@ -165,6 +176,27 @@ class SerialTransport(Transport):
         with self._lock:
             n = self.ser.in_waiting
             return self.ser.read(n) if n else self.ser.read(1)
+
+    def read_if_active(self) -> bytes:
+        """后台 reader 专用读取。
+
+        与 set_paused 在同一把锁内检查 paused + 读串口，保证 exchange/
+        monitor 活跃期间 reader 原子性让路，不抢数据；也不会阻塞消费方的
+        read_available()。
+        """
+        with self._lock:
+            if self._paused:
+                return b""
+            n = self.ser.in_waiting
+            return self.ser.read(n) if n else self.ser.read(1)
+
+    def set_paused(self, paused: bool) -> None:
+        with self._lock:
+            self._paused = paused
+
+    def is_paused(self) -> bool:
+        with self._lock:
+            return self._paused
 
     def write(self, data: bytes) -> int:
         with self._lock:

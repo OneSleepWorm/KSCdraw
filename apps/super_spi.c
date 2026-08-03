@@ -396,10 +396,10 @@ static int sspi_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
  *   appcmd(sspi, "init -i 2");             // 初始化 SPI2 (默认 BR=1, 分频/4)
  *   appcmd(sspi, "init -i 2 -b 0");        // 初始化 SPI2, BR=0 (分频/2, 18MHz)
  *   appcmd(sspi, "tx -i 2 -n 1");          // SPI2 收发 1 字节
- *   sspi->user_data = buf;
+ *   sspi->input_data = buf;
  *   appcmd(sspi, "tx -i 2 -m");            // 使用 mode_data 长度
  *
- * 注意: tx 的发送数据来自 app->user_data, 接收数据存 app->callback_data
+ * 注意: tx 的发送数据来自 app->input_data, 接收数据存 app->output_data
  * ================================================================ */
 
 /* init: 初始化 SPI 实例 — -i inst */
@@ -440,8 +440,8 @@ static int cmd_tx(app_t* app, const char** argv)
     lazy_init_spi(idx, ctx);
     SPI_TypeDef* spi = ctx->inst[idx].spi;
 
-    uint8_t* txb = (uint8_t*)app->user_data;
-    uint8_t* rxb = (uint8_t*)app->callback_data;
+    uint8_t* txb = (uint8_t*)app->input_data;
+    uint8_t* rxb = (uint8_t*)app->output_data;
 
     for (int i = 0; i < n; i++) {
         spi_wait_txe(spi);

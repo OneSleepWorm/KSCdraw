@@ -505,9 +505,9 @@ static int lfs_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 /*
  * appcmd 接口
  * ================================================================
- * 所有输出写到 app->user_data (至少 256 B 缓冲).
- * 字符串数据通过 -d <text>, 二进制通过 user_data + -n <len>.
- * 持久文件 handle 由 ctx->current 管理 (单 slot), 不再使用 callback_data/mode_data.
+ * 所有输出写到 app->input_data (至少 256 B 缓冲).
+ * 字符串数据通过 -d <text>, 二进制通过 input_data + -n <len>.
+ * 持久文件 handle 由 ctx->current 管理 (单 slot), 不再使用 output_data/mode_data.
  */
 
 typedef struct { const char* name; int (*handler)(app_t*, const char**); } lfs_cmd_entry_t;
@@ -562,12 +562,12 @@ static int cmd_info(app_t* app, const char** argv)
     struct lfs_fsinfo fi;
     int ret = lfs_fs_stat(&ctx->lfs, &fi);
     if (ret < 0) return ret;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
     char buf[64];
     int n = snprintf(buf, sizeof(buf), "blk_size=%u blk_count=%u\r\n",
                      (unsigned)fi.block_size, (unsigned)fi.block_count);
     if (n > 0) {
-        if (app->user_data) memcpy(app->user_data, buf, (size_t)n + 1);
+        if (app->input_data) memcpy(app->input_data, buf, (size_t)n + 1);
         else app->output_fn(buf, n, app->output_ctx);
     }
     return ret;
@@ -579,7 +579,7 @@ static int cmd_ls(app_t* app, const char** argv)
 {
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
 
     const char* raw = APPCMD_HAS(argv, 'p') ? argv[APPCMD_ARG('p')] : "";
     char resolved[64];
@@ -604,11 +604,11 @@ static int cmd_ls(app_t* app, const char** argv)
                          info->type == LFS_TYPE_DIR ? 'D' : 'F',
                          info->name, (unsigned)info->size);
         if (n <= 0) continue;
-        if (app->user_data) {
+        if (app->input_data) {
             uint16_t rem = max > (uint16_t)total ? max - (uint16_t)total : 0;
             if (rem == 0) break;
             int cp = n > (int)rem ? (int)rem : n;
-            memcpy((char*)app->user_data + total, line, (size_t)cp);
+            memcpy((char*)app->input_data + total, line, (size_t)cp);
             total += cp;
         } else {
             app->output_fn(line, n, app->output_ctx);
@@ -626,7 +626,7 @@ static int cmd_cat(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
 
     const char* raw = argv[APPCMD_ARG('p')];
     char resolved[64];
@@ -643,8 +643,8 @@ static int cmd_cat(app_t* app, const char** argv)
     if (ret < 0) { osfree(f); return ret; }
 
     lfs_size_t total = 0;
-    if (app->user_data) {
-        lfs_size_t rd = lfs_file_read(&ctx->lfs, f, app->user_data, max);
+    if (app->input_data) {
+        lfs_size_t rd = lfs_file_read(&ctx->lfs, f, app->input_data, max);
         total = rd;
     } else {
         uint8_t chunk[64];
@@ -676,8 +676,8 @@ static int do_write_append(app_t* app, const char** argv, int append_mode)
     if (APPCMD_HAS(argv, 'd')) {
         data = (const uint8_t*)argv[APPCMD_ARG('d')];
         len = (lfs_size_t)strlen((const char*)data);
-    } else if (app->user_data && APPCMD_HAS(argv, 'n')) {
-        data = (const uint8_t*)app->user_data;
+    } else if (app->input_data && APPCMD_HAS(argv, 'n')) {
+        data = (const uint8_t*)app->input_data;
         len = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     } else return -1;
     if (len == 0) return -1;
@@ -769,7 +769,7 @@ static int cmd_stat(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!APPCMD_HAS(argv, 'p')) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
 
     const char* raw = argv[APPCMD_ARG('p')];
     char resolved[64];
@@ -787,7 +787,7 @@ static int cmd_stat(app_t* app, const char** argv)
                      info->type == LFS_TYPE_DIR ? 'D' : 'F',
                      (unsigned)info->size, info->name);
     if (n > 0) {
-        if (app->user_data) memcpy(app->user_data, buf, (size_t)n + 1);
+        if (app->input_data) memcpy(app->input_data, buf, (size_t)n + 1);
         else app->output_fn(buf, n, app->output_ctx);
     }
     osfree(info);
@@ -819,11 +819,11 @@ static int cmd_pwd(app_t* app, const char** argv)
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
 
     int n = (int)strlen(ctx->cwd);
-    if (app->user_data) {
-        memcpy(app->user_data, ctx->cwd, (size_t)n + 1);
+    if (app->input_data) {
+        memcpy(app->input_data, ctx->cwd, (size_t)n + 1);
     } else {
         app->output_fn(ctx->cwd, (uint32_t)n, app->output_ctx);
         app->output_fn("\r\n", 2, app->output_ctx);
@@ -838,13 +838,13 @@ static int cmd_whoami(app_t* app, const char** argv)
     (void)argv;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx) return -1;
-    if (!app->user_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_fn) return -1;
 
     static const char* names[] = {"root", "admin", "user", "guest"};
     const char* name = names[ctx->user_level <= 3 ? ctx->user_level : 3];
     int n = (int)strlen(name);
-    if (app->user_data) {
-        memcpy(app->user_data, name, (size_t)n + 1);
+    if (app->input_data) {
+        memcpy(app->input_data, name, (size_t)n + 1);
     } else {
         app->output_fn(name, (uint32_t)n, app->output_ctx);
         app->output_fn("\r\n", 2, app->output_ctx);
@@ -931,16 +931,16 @@ static int cmd_fread(app_t* app, const char** argv)
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!ctx->current) return -1;
-    if (!app->user_data && !app->callback_data && !app->output_fn) return -1;
+    if (!app->input_data && !app->output_data && !app->output_fn) return -1;
     if (!APPCMD_HAS(argv, 'n')) return -1;
 
     lfs_size_t n = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     if (n == 0) return -1;
 
-    if (app->user_data)
-        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->user_data, n);
-    if (app->callback_data)
-        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->callback_data, n);
+    if (app->input_data)
+        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->input_data, n);
+    if (app->output_data)
+        return (int)lfs_file_read(&ctx->lfs, ctx->current, app->output_data, n);
 
     uint8_t chunk[64];
     lfs_size_t total = 0, rd;
@@ -965,8 +965,8 @@ static int cmd_fwrite(app_t* app, const char** argv)
     if (APPCMD_HAS(argv, 'd')) {
         data = (const uint8_t*)argv[APPCMD_ARG('d')];
         len = (lfs_size_t)strlen((const char*)data);
-    } else if (app->user_data && APPCMD_HAS(argv, 'n')) {
-        data = (const uint8_t*)app->user_data;
+    } else if (app->input_data && APPCMD_HAS(argv, 'n')) {
+        data = (const uint8_t*)app->input_data;
         len = (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     } else { kscprintf("fwrite: no data\r\n"); return -1; }
     if (len == 0) { kscprintf("fwrite: zero len\r\n"); return -1; }
@@ -1134,13 +1134,13 @@ static int cmd_feed(app_t* app, const char** argv)
             }
         }
     } else {
-        if (!app->user_data && !app->output_fn) {
+        if (!app->input_data && !app->output_fn) {
             lfs_file_close(&ctx->lfs, f); osfree(f); return -1;
         }
-        if (app->user_data) {
+        if (app->input_data) {
             lfs_size_t max = APPCMD_HAS(argv, 'n')
                 ? (lfs_size_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0) : 256;
-            total = lfs_file_read(&ctx->lfs, f, app->user_data, max);
+            total = lfs_file_read(&ctx->lfs, f, app->input_data, max);
         } else {
             uint8_t chunk[64];
             lfs_size_t rd;

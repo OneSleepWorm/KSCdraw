@@ -50,7 +50,7 @@
  *   0  — no-op.
  *
  * appcmd 接口 (字符串命令):
- *   flash->user_data = buf;
+ *   flash->input_data = buf;
  *   appcmd(flash, "id")                         → 返回 JEDEC ID
  *   appcmd(flash, "sr")                         → 返回 Status Reg 1
  *   appcmd(flash, "uid")                        → 8 B UID → buf
@@ -330,15 +330,15 @@ static int w25_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
  * appcmd 接口
  * ================================================================
  *
- *   数据通过 app->user_data 传递（读: 调用方设缓冲 → handler 写入;
+ *   数据通过 app->input_data 传递（读: 调用方设缓冲 → handler 写入;
  *   写: 调用方设数据指针 → handler 读出）。
  *
  *   id                               返回 JEDEC ID (如 0xEF4017)
  *   sr                               返回 Status Register 1
- *   uid                              读 8 字节 UID → user_data
- *   read -a <addr> -n <len>          标准读 (0x03), 结果 → user_data
+ *   uid                              读 8 字节 UID → input_data
+ *   read -a <addr> -n <len>          标准读 (0x03), 结果 → input_data
  *   fast -a <addr> -n <len>          快速读 (0x0B + 1 dummy)
- *   write -a <addr> -n <len>         页写 (0x02, ≤256 B), 数据从 user_data 取
+ *   write -a <addr> -n <len>         页写 (0x02, ≤256 B), 数据从 input_data 取
  *   erase -a <addr> -s <size>        擦除: -s 4096/32768/65536
  *   ce                               全片擦除
  */
@@ -373,10 +373,10 @@ static int cmd_uid(app_t* app, const char** argv)
 {
     (void)argv;
     w25_ctx_t* ctx = (w25_ctx_t*)app->app_data;
-    if (!ctx || !app->user_data) return -1;
+    if (!ctx || !app->input_data) return -1;
     uint8_t hdr[5] = {0x4B, 0xFF, 0xFF, 0xFF, 0xFF};
     w25_cs_low(ctx);
-    w25_xfer(ctx, hdr, 5, (uint8_t*)app->user_data, 8);
+    w25_xfer(ctx, hdr, 5, (uint8_t*)app->input_data, 8);
     w25_cs_high(ctx);
     return 8;
 }
@@ -387,10 +387,10 @@ static int cmd_read(app_t* app, const char** argv)
     if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
     uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
     uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
-    if (n == 0 || !app->user_data) return -1;
+    if (n == 0 || !app->input_data) return -1;
     uint8_t cmd[4] = {0x03, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF};
     w25_cs_low(ctx);
-    w25_xfer(ctx, cmd, 4, (uint8_t*)app->user_data, n);
+    w25_xfer(ctx, cmd, 4, (uint8_t*)app->input_data, n);
     w25_cs_high(ctx);
     return (int)n;
 }
@@ -401,10 +401,10 @@ static int cmd_fast(app_t* app, const char** argv)
     if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
     uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
     uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
-    if (n == 0 || !app->user_data) return -1;
+    if (n == 0 || !app->input_data) return -1;
     uint8_t cmd[5] = {0x0B, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF, 0xFF};
     w25_cs_low(ctx);
-    w25_xfer(ctx, cmd, 5, (uint8_t*)app->user_data, n);
+    w25_xfer(ctx, cmd, 5, (uint8_t*)app->input_data, n);
     w25_cs_high(ctx);
     return (int)n;
 }
@@ -415,8 +415,8 @@ static int cmd_write(app_t* app, const char** argv)
     if (!ctx || !APPCMD_HAS(argv, 'a') || !APPCMD_HAS(argv, 'n')) return -1;
     uint32_t addr = strtoul(argv[APPCMD_ARG('a')], NULL, 16);
     uint16_t n = (uint16_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
-    if (n == 0 || n > 256 || !app->user_data) return -1;
-    uint8_t* src = (uint8_t*)app->user_data;
+    if (n == 0 || n > 256 || !app->input_data) return -1;
+    uint8_t* src = (uint8_t*)app->input_data;
     w25_wait_ready(ctx);
     w25_we(ctx);
     uint8_t hdr[4] = {0x02, (addr>>16)&0xFF, (addr>>8)&0xFF, addr&0xFF};

@@ -28,6 +28,7 @@ ki8 KSCOS_default_Error_Handler(void* data)
 #include <stdio.h>
 
 app_t* ksc_console = NULL;
+app_t* ksc_term = NULL;
 volatile uint32_t sys_tick_ms = 0;
 volatile uint32_t KSCOSsystem_Clock = 0;
 
@@ -89,32 +90,14 @@ void sys_init(void)
         appopen(uart);
         appcmd(uart, "open -i 1");
     }
-
     ksc_console = uart;
-}
-
-int __io_putchar(int ch)
-{
-    if (ksc_console && ksc_console->app_data) {
-        char c = (char)ch;
-        appwrite(ksc_console, &c, 1, 0x01);
-    }
-    return ch;
-}
-
-void kscprintf(const char* fmt, ...)
-{
-    if (!ksc_console) return;
-    va_list ap;
-    va_start(ap, fmt);
-    char buf[128];
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if (n > 0) {
-        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        appwrite(ksc_console, buf, len, 0x11);
+    app_t* term = appget("terminal");
+    if (term) {
+        appopen(term);
+        ksc_term = term;
     }
 }
+
 
 void KSCOSSystemClock_Init(unsigned char clock_type)
 {
@@ -157,6 +140,24 @@ void sys_init(void)
     }
 }
 
+void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }
+void KSCOS_Error_Handler(void) { while (1); }
+
+#else
+#error "KSCOS: No platform selected. Define __USE_STM32__, __USE_PC__, or __USE_ESP32__ as 1."
+#endif
+
+#if __USE_PC__ || __USE_STM32__
+
+int __io_putchar(int ch)
+{
+    if (ksc_console && ksc_console->app_data) {
+        char c = (char)ch;
+        appwrite(ksc_console, &c, 1, 0);
+    }
+    return ch;
+}
+
 void kscprintf(const char* fmt, ...)
 {
     if (!ksc_console) return;
@@ -167,28 +168,17 @@ void kscprintf(const char* fmt, ...)
     va_end(ap);
     if (n > 0) {
         size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        appwrite(ksc_console, buf, len, 0x11);
+        appwrite(ksc_console, buf, len, 0);
     }
 }
 
-int ksccmd(void* data)
+int kscterminal(void)
 {
-    if (!ksc_term || !data) return -1;
-    size_t len = strlen((const char*)data);
-    return appwrite(ksc_term, data, (uint32_t)len, 1);
+    if (!ksc_term) return -1;
+    uint8_t c;
+    uint8_t r1;
+    while (appread(ksc_console, &c, 1, 0) > 0)
+        r1 = appwrite(ksc_term, &c, 1, 0);
+    return r1;
 }
-
-void kscread(void* data)
-{
-    if (!ksc_console) return;
-    appread(ksc_console, data, 64, 1);
-}
-
-
-
-void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }
-void KSCOS_Error_Handler(void) { while (1); }
-
-#else
-#error "KSCOS: No platform selected. Define __USE_STM32__, __USE_PC__, or __USE_ESP32__ as 1."
 #endif

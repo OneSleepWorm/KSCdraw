@@ -90,8 +90,8 @@ app_t* appget(const char* name)
         app->output_fn   = NULL;
         app->output_ctx  = NULL;
         app->app_data    = NULL;
-        app->user_data   = NULL;
-        app->callback_data = NULL;
+        app->input_data   = NULL;
+        app->output_data = NULL;
         app->mode_data   = NULL;
 
         if (papp->app_dep_str) {

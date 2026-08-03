@@ -46,7 +46,7 @@
  *     string -x <x> -y <y> -s <text> -c <fg> -b <bg>
  *
  *   图像 (直接从内存绘制)
- *     image -x <x> -y <y> -w <w> -h <h>  (data = app->user_data)
+ *     image -x <x> -y <y> -w <w> -h <h>  (data = app->input_data)
  *     ibin  -x <x> -y <y> -w <w> -h <h> -c <fg> -b <bg>
  *     ibig  -x <x> -y <y> -w <w> -h <h> -s <scale>
  *
@@ -62,8 +62,8 @@
  *     wbk     -t <handle> -c <bk>
  *     wzorder -t <handle> -z <z>
  *     wactive                    -> 返回 active 句柄
- *     winfo   -t <handle>        通过 app->callback_data 返回 tile_info_t
- *     wenum                      通过 app->user_data + callback_data 枚举
+ *     winfo   -t <handle>        通过 app->output_data 返回 tile_info_t
+ *     wenum                      通过 app->input_data + output_data 枚举
  *
  * --- 渲染 ---
  *     trenderall                 遍历所有 visible tile 按 Z 序重绘
@@ -477,7 +477,7 @@ static int cmd_init(app_t* app, const char** argv)
 
         appcmd(gpio, "set -p 24 -v 0");
         appcmd(gpio, "set -p 28 -v 0");
-        sspi->user_data = (void*)&cmd;
+        sspi->input_data = (void*)&cmd;
         sspi->mode_data = NULL;
         appcmd(sspi, "tx -i 2 -n 1");
         appcmd(gpio, "set -p 28 -v 1");
@@ -486,7 +486,7 @@ static int cmd_init(app_t* app, const char** argv)
         if (n) {
             sspi_mode_t md = { .len = n };
             sspi->mode_data = &md;
-            sspi->user_data = (void*)p;
+            sspi->input_data = (void*)p;
             appcmd(gpio, "set -p 28 -v 0");
             appcmd(sspi, "tx -i 2 -m");
             appcmd(gpio, "set -p 28 -v 1");
@@ -761,7 +761,7 @@ static int cmd_wcreate(app_t* app, const char** argv)
     t->z = max_z + 1;
     tile_h_t hnd = TILE_MAKE_HANDLE(t->gen, (uint8_t)slot);
     kfull(&ctx->dev, &t->win, t->win.bk, 0, 0, t->win.width, t->win.height);
-    app->callback_data = (void*)(uintptr_t)hnd;
+    app->output_data = (void*)(uintptr_t)hnd;
     return (int)(uint8_t)hnd;
 }
 
@@ -895,7 +895,7 @@ static int cmd_winfo(app_t* app, const char** argv)
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
     tile_t* t = &ctx->tiles[slot];
-    tile_info_t* info = (tile_info_t*)app->user_data;
+    tile_info_t* info = (tile_info_t*)app->input_data;
     if (!info) return 0;
     info->handle = h;
     info->x = t->win.ssx;
@@ -915,7 +915,7 @@ static int cmd_wenum(app_t* app, const char** argv)
     (void)argv;
     gui_ctx_t* ctx = GUI_CTX(app);
     if (!ctx) return -1;
-    tile_h_t* buf = (tile_h_t*)app->user_data;
+    tile_h_t* buf = (tile_h_t*)app->input_data;
     int* count_ptr = (int*)app->mode_data;
     if (!buf || !count_ptr) return 0;
     int max_out = *count_ptr;
@@ -977,7 +977,7 @@ static int cmd_setobjpool(app_t* app, const char** argv)
     if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
-    ctx->tiles[slot].win.objbuf = (ksc_obj_t*)app->user_data;
+    ctx->tiles[slot].win.objbuf = (ksc_obj_t*)app->input_data;
     ctx->tiles[slot].win.objnum = (uint8_t)strtoul(argv[APPCMD_ARG('n')], NULL, 0);
     return 1;
 }
@@ -990,14 +990,14 @@ static int cmd_getobjpool(app_t* app, const char** argv)
     if (!h) return -1;
     int slot = tile_slot_by_handle(ctx, h);
     if (slot < 0) return 0;
-    if (app->user_data) *(int*)app->user_data = (int)ctx->tiles[slot].win.objnum;
+    if (app->input_data) *(int*)app->input_data = (int)ctx->tiles[slot].win.objnum;
     return (int)(intptr_t)ctx->tiles[slot].win.objbuf;
 }
 
 static int cmd_setdrawfunc(app_t* app, const char** argv)
 {
     if (!APPCMD_HAS(argv, 'i')) return -1;
-    draw_fn fn = (draw_fn)app->user_data;
+    draw_fn fn = (draw_fn)app->input_data;
     return (ksc_set_draw_func((uint8_t)strtoul(argv[APPCMD_ARG('i')], NULL, 0), fn) == 0) ? 1 : 0;
 }
 
@@ -1014,7 +1014,7 @@ static int cmd_drawrow(app_t* app, const char** argv)
     uint16_t x = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
     uint16_t y = (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
     uint16_t w = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
-    const uint8_t* img = (const uint8_t*)app->user_data;
+    const uint8_t* img = (const uint8_t*)app->input_data;
     if (!img) return -1;
     uint32_t n = (uint32_t)w * 2;
     if (n > sizeof(ctx->pixbuf)) return -1;
@@ -1035,7 +1035,7 @@ static int cmd_image(app_t* app, const char** argv)
     uint16_t y = (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
     uint16_t w = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
     uint16_t h = (uint16_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
-    const uint8_t* img = (const uint8_t*)app->user_data;
+    const uint8_t* img = (const uint8_t*)app->input_data;
     if (!img) return -1;
     gui_window_setcanvas(&ctx->dev, scr, x, y, w, h);
     uint32_t remain = (uint32_t)w * h * 2;
@@ -1066,7 +1066,7 @@ static int cmd_ibig(app_t* app, const char** argv)
     uint8_t w = (uint8_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
     uint8_t h = (uint8_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
     uint8_t s = (uint8_t)strtoul(argv[APPCMD_ARG('s')], NULL, 0);
-    const uint8_t* img = (const uint8_t*)app->user_data;
+    const uint8_t* img = (const uint8_t*)app->input_data;
     if (!img) return -1;
     for (uint8_t hh = 0; hh < h; hh++) {
         for (uint8_t ww = 0; ww < w; ww++) {
@@ -1092,7 +1092,7 @@ static int cmd_ibin(app_t* app, const char** argv)
     uint8_t h = (uint8_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
     KSCCOLOR fg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
     KSCCOLOR bg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('b')], NULL, 16);
-    const uint8_t* img = (const uint8_t*)app->user_data;
+    const uint8_t* img = (const uint8_t*)app->input_data;
     if (!img) return -1;
     kimagebin(&ctx->dev, scr, img, x, y, w, h, fg, bg);
     return 1;

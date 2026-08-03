@@ -271,7 +271,7 @@ static int btn16_open(app_t* app)
         d->cpx->hold_gap   = HOLD_GAP_DEF;
     }
     app->app_data = d;
-    app->callback_data = &d->rd_val;
+    app->output_data = &d->rd_val;
     return 0;
 }
 
@@ -284,7 +284,7 @@ static int btn16_close(app_t* app)
     }
     if (d->cpx) osfree(d->cpx);
     if (app->app_data) osfree(app->app_data);
-    app->callback_data = NULL;
+    app->output_data = NULL;
     return 0;
 }
 
@@ -343,7 +343,7 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
         d->interval_ms = *(uint32_t*)data;
         app_t* tim = appget("tim_clock");
         tim->user_func  = scan_cb;
-        tim->user_data = app;
+        tim->input_data = app;
         appopen(tim);
         appwrite(tim, NULL, d->interval_ms, 0x31);
         appwrite(tim, NULL, 1, 0x32);
@@ -413,7 +413,7 @@ static int cmd_scan(app_t* app, const char** argv)
     app_t* tim = appget("tim_clock");
     d->interval_ms = ms;
     tim->user_func = scan_cb;
-    tim->user_data = app;
+    tim->input_data = app;
     appopen(tim);
     appwrite(tim, NULL, d->interval_ms, 0x31);
     appwrite(tim, NULL, 1, 0x32);
@@ -472,19 +472,19 @@ static int cmd_rd(app_t* app, const char** argv)
     btn16_data_t* d = (btn16_data_t*)app->app_data;
     if (!app || !d) return -1;
     if (APPCMD_HAS(argv, 'k')) {
-        if (app->callback_data)
-            *(uint32_t*)app->callback_data = d->latest_keys;
+        if (app->output_data)
+            *(uint32_t*)app->output_data = d->latest_keys;
         return 1;
     }
     if (APPCMD_HAS(argv, 'i')) {
-        if (app->callback_data)
-            *(uint32_t*)app->callback_data = d->interval_ms;
+        if (app->output_data)
+            *(uint32_t*)app->output_data = d->interval_ms;
         return 1;
     }
     if (APPCMD_HAS(argv, 'e') && d->complex_mode && d->cpx) {
         uint32_t ev = ev_pop(d->cpx);
-        if (app->callback_data)
-            *(uint32_t*)app->callback_data = ev;
+        if (app->output_data)
+            *(uint32_t*)app->output_data = ev;
         return ev ? 1 : 0;
     }
     return -1;

@@ -145,7 +145,7 @@ class Daemon:
     def _reader(self):
         while not self.stop.is_set():
             try:
-                data = self.transport.read_available()
+                data = self.transport.read_if_active()
                 if data:
                     self._log("收", data)
                 else:
@@ -266,30 +266,34 @@ class Daemon:
             timeout = cmd.get("timeout", 3.0)
             QUIET = 0.2                      # 静默期 200ms：收到首帧后无新数据即返回
 
-            self.transport.read_available()  # 丢旧数据 / 对齐 offset
-            self.transport.write(raw)
-            self._log("发", raw, tag)
+            self.transport.set_paused(True)  # 暂停 reader，独占串口响应
+            try:
+                self.transport.read_available()  # 丢旧数据 / 对齐 offset
+                self.transport.write(raw)
+                self._log("发", raw, tag)
 
-            collected = ""
-            matched = ""
-            end = time.time() + timeout
-            last_data_t = None               # 首帧时间戳
-            while time.time() < end:
-                chunk = self.transport.read_available()
-                if chunk:
-                    self._log("收", chunk)
-                    s = chunk.hex() if hex_mode else chunk.decode("utf-8", errors="replace")
-                    collected += s
-                    last_data_t = time.time()
-                    if expect_str and expect_str in collected:
-                        matched = expect_str
-                        break
-                else:
-                    time.sleep(self.exchange_poll_interval)
-                    # 无 --expect 模式：收到过数据 + 静默期满 → 返回
-                    if not expect_str and last_data_t is not None:
-                        if time.time() - last_data_t >= QUIET:
+                collected = ""
+                matched = ""
+                end = time.time() + timeout
+                last_data_t = None           # 首帧时间戳
+                while time.time() < end:
+                    chunk = self.transport.read_available()
+                    if chunk:
+                        self._log("收", chunk)
+                        s = chunk.hex() if hex_mode else chunk.decode("utf-8", errors="replace")
+                        collected += s
+                        last_data_t = time.time()
+                        if expect_str and expect_str in collected:
+                            matched = expect_str
                             break
+                    else:
+                        time.sleep(self.exchange_poll_interval)
+                        # 无 --expect 模式：收到过数据 + 静默期满 → 返回
+                        if not expect_str and last_data_t is not None:
+                            if time.time() - last_data_t >= QUIET:
+                                break
+            finally:
+                self.transport.set_paused(False)
 
             if expect_str:
                 status = "ok" if matched else "timeout"
@@ -306,6 +310,7 @@ class Daemon:
     def _h_monitor(self, conn, cmd):
         hex_mode = cmd.get("hex", False)
         conn.settimeout(1.0)
+        self.transport.set_paused(True)
         try:
             while not self.stop.is_set():
                 try:
@@ -320,6 +325,8 @@ class Daemon:
                 self._send_json(conn, {"status": "ok", "data": s, "length": len(chunk)})
         except Exception:
             pass
+        finally:
+            self.transport.set_paused(False)
 
     def _h_stop(self, conn, cmd):
         self._send_json(conn, {"status": "ok"})

@@ -309,7 +309,7 @@ static void* tick_cb(void* data)
             init_game(ctx);
             init_objects(ctx);
             ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
-            ctx->obj->user_data = ctx->objs;
+            ctx->obj->input_data = ctx->objs;
             { char _b[32]; snprintf(_b, sizeof(_b), "setobjpool -n %d", OBJ_TOTAL); appcmd(ctx->obj, _b); }
             show_initial(ctx);
             return NULL;
@@ -393,7 +393,7 @@ static int snake_init(app_t* app, int mode)
     appcmd(ctx->obj, "init");
     sysdelay(10);
     appcmd(ctx->obj, "wcreate -x 0 -y 0 -w 240 -h 320 -c 0000");
-    ctx->tile_h = (uint8_t)(uintptr_t)ctx->obj->callback_data;
+    ctx->tile_h = (uint8_t)(uintptr_t)ctx->obj->output_data;
     ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
     appcmd(ctx->obj, "wselect");
 
@@ -406,13 +406,13 @@ static int snake_init(app_t* app, int mode)
     init_game(ctx);
     init_objects(ctx);
     ctx->obj->mode_data = (void*)(uintptr_t)ctx->tile_h;
-    ctx->obj->user_data = ctx->objs;
+    ctx->obj->input_data = ctx->objs;
     { char _b[32]; snprintf(_b, sizeof(_b), "setobjpool -n %d", OBJ_TOTAL); appcmd(ctx->obj, _b); }
     show_initial(ctx);
 
     /* TIM4: mode=0x41 设周期, mode=0x42 count=1 启动 */
     ctx->tim->user_func  = tick_cb;
-    ctx->tim->user_data = app;
+    ctx->tim->input_data = app;
     appopen(ctx->tim);
     appwrite(ctx->tim, NULL, TICK_MS, 0x41);
     appwrite(ctx->tim, NULL, 1,      0x42);

@@ -24,7 +24,7 @@ extern volatile uint32_t sys_tick_ms;
 
 void kscprintf(const char* fmt, ...);
 void kscread(void* data);
-int ksccmd(void* data);
+int kscterminal(void);
 
 void KSCOSSystemClock_Init(uint8_t clock_type);
 void KSCOS_Error_Handler(void);

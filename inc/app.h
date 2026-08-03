@@ -51,9 +51,9 @@ typedef struct app_t {
     app_output_fn       output_fn;
     void*               output_ctx;
     void*               app_data;
-    void*               user_data;
-    void*               callback_data;
-    void*               mode_data;
+    void*               input_data; //输入数据
+    void*               output_data;//输出数据
+    void*               mode_data;  //模式数据
 } app_t;
 
 #define _APP_CONCAT2(a, b) a##b

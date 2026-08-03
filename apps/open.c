@@ -38,13 +38,13 @@ static int cmd_open_file(app_t* app, const char* cmdname, const char** argv)
             uint8_t buf[64];
             int n;
             do {
-                lfs->callback_data = buf;
+                lfs->output_data = buf;
                 char ns[12];
                 snprintf(ns, sizeof(ns), "%zu", sizeof(buf));
                 const char* ra[26] = {0};
                 ra['n' - 'a'] = ns;
                 n = appcmd_argv(lfs, "fread", ra);
-                lfs->callback_data = NULL;
+                lfs->output_data = NULL;
                 if (n > 0)
                     app->output_fn(buf, n, app->output_ctx);
             } while (n > 0);
@@ -77,13 +77,13 @@ static int open_read(app_t* app, void* data, uint32_t count, uint32_t mode)
     app_t* lfs = appget("littlefs");
     if (!lfs) return 0;
 
-    lfs->callback_data = data;
+    lfs->output_data = data;
     char ns[12];
     snprintf(ns, sizeof(ns), "%u", count);
     const char* ra[26] = {0};
     ra['n' - 'a'] = ns;
     int r = appcmd_argv(lfs, "fread", ra);
-    lfs->callback_data = NULL;
+    lfs->output_data = NULL;
     return r;
 }
 

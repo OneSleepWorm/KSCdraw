@@ -20,30 +20,31 @@
  *   RAM(堆):     ~768 B (uart_rx_ring × 3, osmalloc 于 inst_init)
  *
  * ============================================================
- * appwrite — 发送/控制
+ * appwrite — 发送 (mode 被忽略)
  * ============================================================
- *   mode = (inst << 4) | op,  inst=1/2/3
- *
- *   op=1  data,count        轮询发送 count 字节
- *   op=2  count=1/0         开/关实例的 RXNE 中断
- *   op=3  data=&baud,count  设置波特率 (重新计算 BRR)
- *   op=4  —                 noop (初始化占位)
- *   op=5  count=1~3         设置 ioctl 默认实例
+ *   总是向默认实例 (dflt_inst) 轮询发送 count 字节。
+ *   首次调用时自动懒初始化该实例。
  *
  * ============================================================
- * appread — 接收
+ * appread — 接收 (mode 被忽略)
  * ============================================================
- *   mode 编码: bits[3:0]=inst, bit6=block, bit7=overflow
+ *   总是从默认实例 (dflt_inst) 非阻塞读取，返回实际读到的字节数。
  *
- *   inst (1/2/3)       非阻塞读，无数据返回 0
- *   inst | 0x40        阻塞读，空转直到有数据
- *   inst | 0x80        读 overflow 计数 (count>0 自动清零)
+ * ============================================================
+ * appcmd — 控制命令
+ * ============================================================
+ *   open  -i <inst>     初始化实例
+ *   close -i <inst>     关闭实例
+ *   baud  -i <inst> -b <baud>  设置波特率
+ *   rxirq -i <inst> -e <0/1>   RXNE 中断开关
+ *   dflt  -i <inst>     设置默认实例
+ *   rd    -i <inst>     读取当前波特率到 output_data
  *
  * ============================================================
  * 回调 — RX 数据到达通知
  * ============================================================
  *   app->user_func = on_rx;
- *   app->user_data = my_ctx;
+ *   app->input_data = my_ctx;
  *   // ISR 中环空→非空时回调一次 (中断上下文)
  *
  * ============================================================
@@ -51,9 +52,8 @@
  * ============================================================
  *   app_t* u = appget("uart_serial");
  *   appopen(u);
- *   appwrite(u, "Hello\r\n", 7, 0x11);   // USART1 轮询发送
- *   appread(u, buf, 64, 1);               // USART1 非阻塞读
- *   appread(u, buf, 64, 0x41);            // USART1 阻塞读
+ *   appwrite(u, "Hello\r\n", 7, 0);   // 轮询发送 (mode 被忽略)
+ *   appread(u, buf, 64, 0);            // 非阻塞读 (mode 被忽略)
  *   appclose(u);
  *
  * ============================================================
@@ -175,7 +175,7 @@ static int uart_app_open(app_t* app)
         ctx->owner[i] = NULL;
     }
     app->app_data = ctx;
-    app->callback_data = &ctx->rd_val;
+    app->output_data = &ctx->rd_val;
     return 0;
 }
 
@@ -194,82 +194,35 @@ static int uart_app_close(app_t* app)
     }
     osfree(ctx);
     app->app_data = NULL;
-    app->callback_data = NULL;
+    app->output_data = NULL;
     return 0;
 }
 
 static int uart_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)mode;
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!ctx) return -1;
+    if (!data || count == 0) return 0;
 
-    if (mode == 0x05) {
-        if (count >= 1 && count <= 3) ctx->dflt_inst = (uint8_t)count;
-        return 1;
-    }
-
-    uint32_t inst = mode >> 4;
-    uint32_t op   = mode & 0x0F;
-    if (inst == 0) inst = ctx->dflt_inst;
-    if (inst < 1 || inst > 3) return -1;
-
-    inst_init(app, (uint8_t)inst);
+    uint8_t inst = ctx->dflt_inst;
+    inst_init(app, inst);
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
 
-    USART_TypeDef* uart = uart_reg((uint8_t)inst);
-
-    switch (op) {
-    case 0:
-    case 1:
-        if (!data || count == 0) return 0;
-        uart_tx_raw(uart, (const uint8_t*)data, count);
-        return (int)count;
-
-    case 2:
-        if (count)
-            uart->CR1 |= USART_CR1_RXNEIE;
-        else
-            uart->CR1 &= ~USART_CR1_RXNEIE;
-        return 1;
-
-    case 3: {
-        uint32_t baud = data ? *(uint32_t*)data : count;
-        if (baud < 1200) return -1;
-        ctx->brr[inst - 1] = uart_brr_compute((uint8_t)inst, baud);
-        if (ctx->enabled & (1 << (inst - 1)))
-            uart->BRR = ctx->brr[inst - 1];
-        return 1;
-    }
-
-    case 4:
-        return 1;
-
-    default:
-        return -1;
-    }
+    uart_tx_raw(uart_reg(inst), (const uint8_t*)data, count);
+    return (int)count;
 }
 
 static int uart_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)mode;
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
-    if (!ctx || !data) return 0;
+    if (!ctx || !data || !count) return 0;
 
-    uint32_t inst = mode & 0x0F;
-    if (inst < 1 || inst > 3) return 0;
+    uint8_t inst = ctx->dflt_inst;
     if (!(ctx->enabled & (1 << (inst - 1)))) return 0;
 
     uart_rx_ring_t* r = ctx->ring[inst - 1];
-
-    if (mode & 0x80) {
-        *(uint32_t*)data = r->overflow;
-        if (count) r->overflow = 0;
-        return sizeof(uint32_t);
-    }
-
-    if (mode & 0x40)
-        while (r->head == r->tail);
-
-    if (!count) return 0;
     uint32_t read = 0;
     while (read < count && r->head != r->tail) {
         ((uint8_t*)data)[read++] = r->buf[r->tail];
@@ -355,7 +308,7 @@ static int cmd_baudrd(app_t* app, const char** argv)  /* rd */
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     uint32_t pclk = (inst == 1) ? SystemCoreClock : (SystemCoreClock / 2);
     uint32_t baud = pclk / ctx->brr[inst - 1];
-    if (app->callback_data) *(uint32_t*)app->callback_data = baud;
+    if (app->output_data) *(uint32_t*)app->output_data = baud;
     return 1;
 }
 
@@ -414,7 +367,7 @@ static void uart_irq_handler(int idx)
                 r->overflow++;
             }
             if (was_empty && app->user_func)
-                app->user_func(app->user_data);
+                app->user_func(app->input_data);
         }
     }
 }
@@ -518,66 +471,30 @@ static int pc_uart_close(app_t* app)
 
 static int pc_uart_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)mode;
     pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (!ctx || !ctx->stdout_fp) return -1;
+    if (!ctx || !ctx->stdout_fp || !data || count == 0) return -1;
 
-    uint32_t inst = mode >> 4;
-    uint32_t op   = mode & 0x0F;
-    (void)inst;
-
-    switch (op) {
-    case 0:
-    case 1:
-        if (!data || count == 0) return 0;
-        fseek(ctx->stdout_fp, 0, SEEK_END);
-        fwrite(data, 1, count, ctx->stdout_fp);
-        fflush(ctx->stdout_fp);
-        return (int)count;
-
-    case 2:  /* RXNE interrupt — no-op on PC */
-        return 1;
-
-    case 3:  /* set baud rate — no-op on PC */
-        return 1;
-
-    case 4:
-        return 1;
-
-    default:
-        return -1;
-    }
+    fseek(ctx->stdout_fp, 0, SEEK_END);
+    fwrite(data, 1, count, ctx->stdout_fp);
+    fflush(ctx->stdout_fp);
+    return (int)count;
 }
 
 static int pc_uart_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)mode;
     pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (!ctx || !data) return 0;
+    if (!ctx || !data || !count) return 0;
 
-    /* overflow read (mode bit 7) */
-    if (mode & 0x80) {
-        *(uint32_t*)data = ctx->rx_overflow;
-        if (count) ctx->rx_overflow = 0;
-        return sizeof(uint32_t);
-    }
-
-    /* drain stdin.txt into ring buffer */
     pc_uart_drain_stdin(ctx);
 
-    /* blocking mode (mode bit 6) */
-    if (mode & 0x40)
-        while (ctx->rx_tail == ctx->rx_head);
-
-    if (!count) return 0;
-
-    /* copy from ring buffer to user buffer */
     uint32_t rd = 0;
     while (rd < count && ctx->rx_tail != ctx->rx_head) {
         ((uint8_t*)data)[rd] = ctx->rx_buf[ctx->rx_tail];
         ctx->rx_tail = (uint16_t)((ctx->rx_tail + 1) & (PC_UART_RX_BUF_SIZE - 1));
         rd++;
     }
-    if (rd < count)
-        ((uint8_t*)data)[rd] = '\0';
     return (int)rd;
 }
 

@@ -38,7 +38,7 @@
  *   appcmd(list, "select -i idx")          -> 选中指定项
  *   appcmd(list, "move -d delta")          -> [+1/-1] 移动选中
  *   appcmd(list, "confirm")                -> 触发 user_func
- *   选中变化时自动调用 app->user_func(app->user_data)
+ *   选中变化时自动调用 app->user_func(app->input_data)
  *
  *   --- 查询 ---
  *   appcmd(list, "getcount")               -> int 返回值
@@ -47,8 +47,8 @@
  *   appread(list, buf, idx, 2)            -> 拷贝标签
  *
  *   --- 外观 ---
- *   appcmd(list, "setpos") [user_data]     -> list_pos_t 结构体
- *   appcmd(list, "setcolors") [user_data]  -> list_colors_t 结构体
+ *   appcmd(list, "setpos") [input_data]     -> list_pos_t 结构体
+ *   appcmd(list, "setcolors") [input_data]  -> list_colors_t 结构体
  *   appcmd(list, "setstyle -s <0-4>")     -> 选中样式 (0-4)
  *   appcmd(list, "init")                   -> 创建 KSCGUI 窗口 + 首绘
  *   appcmd(list, "refresh")                -> 全量重绘
@@ -88,7 +88,7 @@
  *
  *   app_t* list = appget("list");
  *   list->user_func = my_cb;
- *   list->user_data = my_ctx;
+ *   list->input_data = my_ctx;
  *   appopen(list);
  *
  *   appcmd(list, "add -d System");
@@ -97,8 +97,8 @@
  *
  *   list_pos_t pos = {0, 0, 240, 320, 24};
  *   list_colors_t col = {0x001F, 0x0000, 0xFFFF, 0xF800};
- *   list->user_data = &pos; appcmd(list, "setpos");
- *   list->user_data = &col; appcmd(list, "setcolors");
+ *   list->input_data = &pos; appcmd(list, "setpos");
+ *   list->input_data = &col; appcmd(list, "setcolors");
  *   appcmd(list, "setstyle -s 1");
  *   appcmd(list, "init");
  *
@@ -434,7 +434,7 @@ static int do_select(list_ctx_t* ctx, uint8_t idx)
     }
 
     if (ctx->app && ctx->app->user_func)
-        ctx->app->user_func(ctx->app->user_data);
+        ctx->app->user_func(ctx->app->input_data);
 
     return 0;
 }
@@ -518,7 +518,7 @@ static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
     { char _b[80]; snprintf(_b, sizeof(_b), "wcreate -x %d -y %d -w %d -h %d -c %04X",
         ctx->x, ctx->y, ctx->w, ctx->h, ctx->bg);
       appcmd(ctx->gui, _b);
-      ctx->tile = (tile_h_t)(uintptr_t)ctx->gui->callback_data; }
+      ctx->tile = (tile_h_t)(uintptr_t)ctx->gui->output_data; }
     ctx->gui->mode_data = (void*)(uintptr_t)ctx->tile;
     appcmd(ctx->gui, "wselect");
     ctx->hw_opened = 1;
@@ -536,14 +536,14 @@ static int cmd_init(app_t* app, list_ctx_t* ctx, const char** argv)
         if (has_o) ctx->km.ok   = k_ok;
         if (has_q) ctx->km.quit = k_quit;
         ctx->ctrl_cb   = (ctrl_event_cb_t)app->mode_data;
-        ctx->ctrl_user = app->callback_data;
+        ctx->ctrl_user = app->output_data;
         if (appopen(ctx->kpd) < 0) return -1;
         appwrite(ctx->kpd, NULL, 0, 1);
         { uint32_t iv = ctx->ctrl_interval_ms; appwrite(ctx->kpd, &iv, 1, 2); }
         { uint32_t enable = 1; appwrite(ctx->kpd, &enable, 1, 4); }
         { uint32_t p[2] = {CTRL_HOLD_TICKS, CTRL_HOLD_GAP}; appwrite(ctx->kpd, p, 2, 5); }
         ctx->tim->user_func = list_tick_cb;
-        ctx->tim->user_data = app;
+        ctx->tim->input_data = app;
         appopen(ctx->tim);
         appwrite(ctx->tim, NULL, ctx->ctrl_interval_ms, 0x41);
         appwrite(ctx->tim, NULL, 1, 0x42);
@@ -604,7 +604,7 @@ static int cmd_confirm(app_t* app, list_ctx_t* ctx, const char** argv)
 {
     (void)app; (void)argv;
     if (ctx->app && ctx->app->user_func)
-        ctx->app->user_func(ctx->app->user_data);
+        ctx->app->user_func(ctx->app->input_data);
     return 1;
 }
 
@@ -630,14 +630,14 @@ static int cmd_getlabel(app_t* app, list_ctx_t* ctx, const char** argv)
     if (idx < 0 || idx >= ctx->count) return -1;
     const char* s = ctx->data_buf + ctx->offsets[idx];
     int len = (int)strlen(s) + 1;
-    if (app->user_data) memcpy(app->user_data, s, (size_t)len);
+    if (app->input_data) memcpy(app->input_data, s, (size_t)len);
     return len;
 }
 
 static int cmd_setpos(app_t* app, list_ctx_t* ctx, const char** argv)
 {
     if (APPCMD_HAS(argv, 'x')) ctx->x = (uint8_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
-    else if (app->user_data) { const list_pos_t* p = (const list_pos_t*)app->user_data; ctx->x = p->x; ctx->y = p->y; ctx->w = p->w; ctx->h = p->h; ctx->item_h = p->item_h; }
+    else if (app->input_data) { const list_pos_t* p = (const list_pos_t*)app->input_data; ctx->x = p->x; ctx->y = p->y; ctx->w = p->w; ctx->h = p->h; ctx->item_h = p->item_h; }
     if (APPCMD_HAS(argv, 'y')) ctx->y = (uint8_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
     if (APPCMD_HAS(argv, 'w')) ctx->w = (uint8_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
     if (APPCMD_HAS(argv, 'h')) ctx->h = (uint8_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
@@ -655,7 +655,7 @@ static int cmd_setpos(app_t* app, list_ctx_t* ctx, const char** argv)
 static int cmd_setcolors(app_t* app, list_ctx_t* ctx, const char** argv)
 {
     if (APPCMD_HAS(argv, 'a')) ctx->sel_bg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('a')], NULL, 16);
-    else if (app->user_data) { const list_colors_t* c = (const list_colors_t*)app->user_data; ctx->sel_bg = c->sel_bg; ctx->bg = c->bg; ctx->fg = c->fg; ctx->sel_fg = c->sel_fg; }
+    else if (app->input_data) { const list_colors_t* c = (const list_colors_t*)app->input_data; ctx->sel_bg = c->sel_bg; ctx->bg = c->bg; ctx->fg = c->fg; ctx->sel_fg = c->sel_fg; }
     if (APPCMD_HAS(argv, 'b')) ctx->bg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('b')], NULL, 16);
     if (APPCMD_HAS(argv, 'c')) ctx->fg     = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
     if (APPCMD_HAS(argv, 'd')) ctx->sel_fg = (KSCCOLOR)strtoul(argv[APPCMD_ARG('d')], NULL, 16);

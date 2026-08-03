@@ -15,7 +15,7 @@
  * ============================================================
  *   app_t* t = appget("tim_clock");
  *   t->user_func = my_cb;
- *   t->user_data = my_ud;
+ *   t->input_data = my_ud;
  *   appopen(t);
  *   appwrite(t, NULL, 250, 0x41);   // TIM1, 设置周期
  *   appwrite(t, NULL, 1,   0x42);   // TIM1, 启动
@@ -89,12 +89,12 @@ static void inst_init(app_t* app, tim_ctx_t* ctx, uint8_t inst)
     if (ctx->enabled & bit) return;
 
     ctx->cb[inst - 1] = app->user_func;
-    ctx->ud[inst - 1] = app->user_data;
+    ctx->ud[inst - 1] = app->input_data;
 
     rcc_enable(inst);
 
     TIM_TypeDef* tim = tim_reg(inst);
-    uint32_t period = app->user_data ? (uint32_t)(uintptr_t)app->user_data : 1000;
+    uint32_t period = app->input_data ? (uint32_t)(uintptr_t)app->input_data : 1000;
     uint32_t psc = KSCOSsystem_Clock / 10000 - 1;
     uint32_t arr = 10 * period - 1;
     tim->PSC = (uint16_t)psc;
@@ -116,7 +116,7 @@ static int tim_app_open(app_t* app)
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(tim_ctx_t));
     app->app_data = ctx;
-    app->callback_data = &ctx->rd_val;
+    app->output_data = &ctx->rd_val;
     return 0;
 }
 
@@ -137,7 +137,7 @@ static int tim_app_close(app_t* app)
     }
     osfree(ctx);
     app->app_data = NULL;
-    app->callback_data = NULL;
+    app->output_data = NULL;
     return 0;
 }
 
@@ -265,8 +265,8 @@ static int cmd_timrd(app_t* app, const char** argv)
     if (inst < 1 || inst > 4) return -1;
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     TIM_TypeDef* tim = tim_reg((uint8_t)inst);
-    if (app->callback_data)
-        *(uint32_t*)app->callback_data = (tim->ARR + 1) / 10;
+    if (app->output_data)
+        *(uint32_t*)app->output_data = (tim->ARR + 1) / 10;
     return 1;
 }
 
@@ -374,7 +374,7 @@ static int tim_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     case 2:
         if (count) {
             ctx->cb[i] = app->user_func;
-            ctx->ud[i] = app->user_data;
+            ctx->ud[i] = app->input_data;
             ctx->running[i] = 1;
             ctx->counter[i] = 0;
             if (!ctx->thread_run) {
@@ -429,7 +429,7 @@ static int cmd_regcb(app_t* app, const char** argv)
     if (inst < 1 || inst > 4) return -1;
     int i = (int)(inst - 1);
     ctx->cb[i] = app->user_func;
-    ctx->ud[i] = app->user_data;
+    ctx->ud[i] = app->input_data;
     ctx->running[i] = 1;
     if (!ctx->thread_run) {
         ctx->thread_run = 1;
@@ -459,7 +459,7 @@ static int cmd_start(app_t* app, const char** argv)
     if (inst < 1 || inst > 4) return -1;
     int i = (int)(inst - 1);
     ctx->cb[i] = app->user_func;
-    ctx->ud[i] = app->user_data;
+    ctx->ud[i] = app->input_data;
     ctx->running[i] = 1;
     ctx->counter[i] = 0;
     if (!ctx->thread_run) {
@@ -497,8 +497,8 @@ static int cmd_timrd(app_t* app, const char** argv)
     if (!app || !APPCMD_HAS(argv, 'i')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
     if (inst < 1 || inst > 4) return -1;
-    if (app->callback_data)
-        *(uint32_t*)app->callback_data = ctx->period[inst - 1];
+    if (app->output_data)
+        *(uint32_t*)app->output_data = ctx->period[inst - 1];
     return 1;
 }
 
