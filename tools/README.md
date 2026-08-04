@@ -21,6 +21,7 @@ tools/
 │   ├── __init__.py         包入口
 │   ├── __main__.py         `python imgconv/ <cmd>` 直接运行时入口
 │   └── cli.py              argparse + 转换 + 上传逻辑
+├── api_smoke.py            核心模块跨平台冒烟验证（FS + GUI）
 ├── userdata/               tools 默认读取路径（放图片等源文件）
 ├── appdata/
 │   └── imgconv/            各工具默认输出路径（自动创建）
@@ -207,6 +208,47 @@ python -m pytest tests/ -v          # 50 个用例，约 8 秒
 测试用 `MockTransport`（内存 transport），**不**开 socket、不动文件、不依赖 pyserial。
 覆盖率：Transport / FileTransport / MockTransport / log_entry / PID 文件生命周期 /
 Daemon 全部协议分支 / `_send_to_daemon` 异常路径 / `_ensure_daemon` 僵尸恢复。
+
+---
+
+## api_smoke
+
+核心模块（littlefs FS + KSCGUI）**跨平台冒烟验证**脚本。通过 monitor daemon 对下位机逐条发 appcmd 命令，断言响应子串，一次性完成「开 daemon → 跑用例 → 汇总 PASS/FAIL → 关 daemon」，退出码可接 CI。
+
+### 用法
+
+```powershell
+# STM32 真机（板子需已烧录固件并接串口）
+python tools/api_smoke.py --transport serial --port COM6 --baud 115200
+
+# PC（file transport）—— 需先启动 build_debug/KSCOS.exe
+python tools/api_smoke.py
+
+# 只跑名字包含某关键字的用例
+python tools/api_smoke.py --filter littlefs
+```
+
+常用参数：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--transport` | `file` | `serial`（真机）/ `file`（PC） |
+| `--port` | `COM6` | 串口 |
+| `--baud` | `115200` | 波特率 |
+| `--filter` | 空 | 只跑用例名含该子串的用例 |
+| `--timeout` | `4.0` | 单条命令超时（秒） |
+| `--keep-open` | 关 | 跑完不关 daemon |
+
+### 用例表（25 条）
+
+- **littlefs FS (9)**：mount / ls / mkdir / writenew / cat / stat / mv / rm / rmdir —— 验证文件系统写读删改全链路。
+- **KSCGUI (16)**：init / fill / pixel / line / rect / fill / circle / fcircle / arc / rrect / frrect / char / string / wcreate / wselect。
+
+### ⚠️ 关键约定
+
+- **STM32 上必须先 `KSCGUI init`** 跑 ST7789 初始化时序（GPIO + SPI2 + 寄存器序列）才能出屏；PC 上是幂等空操作。缺少 init 时绘图命令仍返回 `ok:` 但屏幕不亮。
+- GUI 绘制在红底 (`fill -c F800`) 上叠加，跑完屏幕应为**红底 + 彩色几何元素 + 左上 100x100 白块**，以此确认像素级真实出屏。
+- PC file transport 无响应 = `KSCOS.exe` 未运行，先启动程序再跑脚本。
 
 ---
 
