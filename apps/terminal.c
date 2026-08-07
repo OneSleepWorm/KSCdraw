@@ -134,6 +134,7 @@ static int term_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 
 static int term_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)mode;
     term_ctx_t* ctx = (term_ctx_t*)app->app_data;
     if (!ctx || !data) return -1;
 

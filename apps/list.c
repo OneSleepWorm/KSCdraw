@@ -237,7 +237,7 @@ static void frag_compact(list_ctx_t* ctx)
 
 static int pool_add(list_ctx_t* ctx, const char* s)
 {
-    uint8_t len = strlen(s) + 1;
+    uint16_t len = (uint16_t)(strlen(s) + 1);
     if (ctx->count >= LIST_MAX_ITEMS || len > LIST_DATA_BUF)
         return -1;
 

@@ -10,6 +10,7 @@
 
 static void transfer_tx_byte(struct xmodem_server *xdm, uint8_t byte, void *cb_data)
 {
+    (void)xdm;
     app_t* app = (app_t*)cb_data;
     transfer_ctx_t* ctx = (transfer_ctx_t*)app->app_data;
     if (ctx && ctx->uart)

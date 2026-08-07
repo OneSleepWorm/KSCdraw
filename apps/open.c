@@ -79,7 +79,7 @@ static int open_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 
     lfs->output_data = data;
     char ns[12];
-    snprintf(ns, sizeof(ns), "%u", count);
+    snprintf(ns, sizeof(ns), "%lu", (unsigned long)count);
     const char* ra[26] = {0};
     ra['n' - 'a'] = ns;
     int r = appcmd_argv(lfs, "fread", ra);

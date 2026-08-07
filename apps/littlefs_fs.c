@@ -389,6 +389,7 @@ typedef struct {
 
 static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)count;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx) return -1;
     int ret;
@@ -472,6 +473,7 @@ static int lfs_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 
 static int lfs_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
+    (void)count;
     lfs_ctx_t* ctx = (lfs_ctx_t*)app->app_data;
     if (!ctx || !ctx->mounted) return -1;
     if (!data) return -1;
@@ -1056,7 +1058,7 @@ static int cmd_feed(app_t* app, const char** argv)
 
         {
             char wc[80];
-            snprintf(wc, sizeof(wc), "wcreate -x %u -y %u -w %u -h %u -c %06lX", tx, ty, tw, th_, tc);
+            snprintf(wc, sizeof(wc), "wcreate -x %u -y %u -w %u -h %u -c %06lX", tx, ty, tw, th_, (unsigned long)tc);
             int th = appcmd(gui, wc);
             if (th <= 0) { lfs_file_close(&ctx->lfs, f); osfree(f); return -1; }
             char sel[24];
@@ -1096,7 +1098,7 @@ static int cmd_feed(app_t* app, const char** argv)
                                 *sp++ = src[j]; rem--;
                             }
                             if (rem > 1) { *sp++ = '"'; rem--; }
-                            snprintf(sp, rem, " -c FFFF -b %06lX", tc);
+                            snprintf(sp, rem, " -c FFFF -b %06lX", (unsigned long)tc);
                             appcmd(gui, sc);
 
                             y += line_h;
@@ -1126,7 +1128,7 @@ static int cmd_feed(app_t* app, const char** argv)
                     *sp++ = src[j]; rem--;
                 }
                 if (rem > 1) { *sp++ = '"'; rem--; }
-                snprintf(sp, rem, " -c FFFF -b %06lX", tc);
+                snprintf(sp, rem, " -c FFFF -b %06lX", (unsigned long)tc);
                 appcmd(gui, sc);
 
                 y += line_h;
