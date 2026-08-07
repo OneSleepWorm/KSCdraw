@@ -365,8 +365,14 @@ KSCGUI 内部维护 16 个 `KSC_window` 槽 (capacity 16, 每槽含 `ksc_obj_t[]
 
 | 命令 | 参数 | 说明 |
 |------|------|------|
-| `init` | — | 初始化 ST7789 + 创建全屏 tile |
+| `init` | — | 初始化屏幕硬件 + 创建全屏 tile |
 | `setspi` | `<inst>` | 切 SPI 实例 (1/2) |
+
+> **跨平台契约（PC 与 STM32 一致）**：必须先 `init` 才能调用任何绘图命令
+> （pixel/fill/rect/line/circle/arc/rrect/char/string/drawbmp/ibig/ibin/trender*）。
+> 未 `init` 时绘图命令一律返回 `-1`（`gui_ctx.hw_inited` 拦截），tile 元数据操作
+> （wcreate/wselect/wmove 等）不受限。PC 上 `init` 创建 easyx 窗口，未 init 时
+> easyx 层还有 `GetHWnd()` 兜底防崩溃；STM32 上 `init` 跑 ST7789 初始化时序。
 
 #### Tile 管理
 
@@ -552,8 +558,13 @@ while (1) __WFI();
 
 ## w25qxx_base
 
-> W25Q64 SPI NOR Flash 基础驱动，所有命令通过 `appcmd`，数据缓冲通过 `app->user_data`。
+> W25Q64 SPI NOR Flash 基础驱动，所有命令通过 `appcmd`，数据缓冲通过 `app->input_data`。
 > CS 引脚 (默认 PB11) 由 `super_spi2` mode=5 运行时重映射。
+
+> **⚠️ 破坏性命令警告**：`write` / `erase` / `ce` 会改写/擦除 W25Q64 原始数据，
+> **直接摧毁 littlefs 文件系统**。littlefs 通过二进制接口（`appwrite` mode 1/3/5）使用 flash，
+> 正常运行和测试**不需要**这些命令。仅开发者做底层调试时使用；执行 `ce`（全片擦除）=
+> 删掉 `.data/flash.bin`。
 
 ### `appcmd` 命令
 
@@ -561,12 +572,12 @@ while (1) __WFI();
 |------|------|------|------|
 | `id` | — | JEDEC ID (`0xEF4017`) | 读 JEDEC ID |
 | `sr` | — | 状态寄存器值 | 读 status register |
-| `uid` | — | 8 (→ user_data) | 8B 唯一 ID 写入 `user_data` |
-| `read` | `-a <addr> -n <len>` | 字节数 (→ user_data) | 标准读 (0x03) |
-| `fast` | `-a <addr> -n <len>` | 字节数 (→ user_data) | 快速读 (0x0B + dummy) |
-| `write` | `-a <addr> -n <len>` | 写入字节数 | 页写 0x02 (≤256B / page) |
-| `erase` | `-a <addr> -s <size>` | 0/-1 | 擦除: size ∈ {4096, 32768, 65536} |
-| `ce` | — | 0/-1 | Chip Erase (0xC7) |
+| `uid` | — | 8 (→ input_data) | 8B 唯一 ID 写入 `input_data` |
+| `read` | `-a <addr> -n <len>` | 字节数 (→ input_data) | 标准读 (0x03) |
+| `fast` | `-a <addr> -n <len>` | 字节数 (→ input_data) | 快速读 (0x0B + dummy) |
+| ⚠️ `write` | `-a <addr> -n <len>` | 写入字节数 | **破坏性** 页写 0x02 (≤256B / page) |
+| ⚠️ `erase` | `-a <addr> -s <size>` | 0/-1 | **破坏性** 擦除: size ∈ {4096, 32768, 65536} |
+| ⚠️ `ce` | — | 0/-1 | **破坏性** Chip Erase (0xC7) = 清空整个 flash |
 
 `-a / -n / -s` 接受 16 进制 (前缀 `0x`) 或 10 进制 (`strtoul(s, NULL, 0)`)。
 
@@ -574,15 +585,18 @@ while (1) __WFI();
 
 ```c
 uint8_t buf[256];
-app->user_data = buf;
+app->input_data = buf;
 int n = appcmd(flash, "read -a 0 -n 256");
 
 uint8_t page[256] = {...};
-app->user_data = page;
-appcmd(flash, "write -a 0 -n 256");
+app->input_data = page;
+appcmd(flash, "write -a 0 -n 256");   /* ⚠️ 破坏性 */
 
-appcmd(flash, "erase -a 0 -s 4096");
+appcmd(flash, "erase -a 0 -s 4096");  /* ⚠️ 破坏性 */
 ```
+
+> 只读命令（`id`/`sr`/`uid`/`read`/`fast`）供诊断使用；`write`/`erase`/`ce`
+> 仅限开发者底层调试，会破坏 littlefs，切勿在正常流程/测试中调用。
 
 ---
 

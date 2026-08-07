@@ -428,11 +428,17 @@ typedef struct ksc_obj_t {
 | `KSCGUI` | `super_spi` | PC+STM32 | GUI Tile 合成器 (16 槽 + Z 序) + ST7789 驱动 (PC: EasyX), ~30 个 appcmd 命令 | `kscgui.c` (详见 `docs/KSCGUI_API.md`) |
 | `list` | `KSCGUI` | PC+STM32 | GUI 列表 widget, 256B 字符串池 + 碎片管理 + 5 种选中样式; 内置键盘控制 | `list.c` |
 | `snake` | `KSCGUI` + `button16` | PC+STM32 | Snake 游戏, 全中断驱动 (TIM4@250ms), 对象增量渲染 | `snake.c` |
-| `w25qxx_base` | `super_spi` | PC+STM32 | W25Q64 SPI NOR Flash: id/sr/uid/read/fast/write/erase/ce (PC: 文件模拟) | `w25qxx_base.c` |
+| `w25qxx_base` | `super_spi` | PC+STM32 | W25Q64 SPI NOR Flash: id/sr/uid/read/fast/write/erase/ce ⚠️ (PC: 文件模拟) | `w25qxx_base.c` |
 | `littlefs` | `w25qxx_base` | PC+STM32 | littlefs 文件系统: 一次性 (`writenew`/`append`/`cat`/`ls`/`rm`/`mkdir`/`mv`/`stat`) + 持久 fd (`open`/`close`/`fread`/`fwrite`/`fseek`) | `littlefs_fs.c` |
 | `terminal` | — | PC+STM32 | 字符串路由分发器: UART RX → 攒行 → 按 `appname subcmd -x v` 路由到 `appget` 目标; 内建 `help`/`echo` | `terminal.c` |
 | `open` | `littlefs` | PC+STM32 | 按扩展名路由文件打开 (`.txt` → uart, `.bmp` → gui) | `open.c` |
 | `transfer` | `uart_serial` + `littlefs` | STM32 | XMODEM-128 文件上传到 littlefs | `transfer.c` |
+
+> **⚠️ 警告：`w25qxx_base` 的 `write` / `erase` / `ce` 是破坏性 appcmd**，会改写/擦除
+> W25Q64 原始数据，**直接摧毁 littlefs 文件系统**（相当于删掉 `.data/flash.bin`）。
+> littlefs 通过二进制接口（`appwrite` mode 1/3/5）使用 flash，**正常运行和测试都不需要
+> 这些命令**。仅开发者做底层调试时使用，执行前请三思。
+> 非破坏的只读命令：`id`（读 JEDEC ID）/ `sr`（读状态寄存器）。
 
 跨 App 共享类型 (常量 / 结构) 定义在 `apps/app_config.h`:
 - `SSPI_MODE(spi_inst, dev_id, op)` / `SSPI_XFER_INST(i)` — super_spi mode 编码宏

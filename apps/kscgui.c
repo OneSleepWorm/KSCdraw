@@ -124,6 +124,11 @@
 /* Cast helper for C++ (PC builds compile as CXX) */
 #define GUI_CTX(app) ((gui_ctx_t*)(app)->app_data)
 
+/* 绘图命令前置检查: 屏幕必须已 cmd_init (hw_inited), 且存在 active tile。
+ * 未 init 直接拒绝 — 与 STM32 一致, 且避免 PC easyx 未建窗崩溃。 */
+#define GUI_REQUIRE_HW(ctx) \
+    do { if (!(ctx) || !(ctx)->hw_inited || !(ctx)->active_handle) return -1; } while (0)
+
 /* ================================================================
  * Constants (SHARED)
  * ================================================================ */
@@ -163,6 +168,7 @@ typedef struct {
     uint16_t        tile_free_map;  /* bitmap: 1=slot free */
     tile_h_t        active_handle;  /* 0=none */
     uint8_t         active_slot;    /* cache of active tile's slot index */
+    uint8_t         hw_inited;      /* 1=cmd_init 已完成屏幕初始化 */
 #if __USE_STM32__
     uint8_t         pixbuf[512];
 #endif
@@ -439,6 +445,8 @@ static int cmd_init(app_t* app, const char** argv)
 {
     (void)argv;
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
+    if (!ctx) return -1;
+    if (ctx->hw_inited) return 1;   /* 幂等 */
     app_t* sspi = ctx->sspi;
     app_t* gpio = ctx->gpio;
     if (!sspi || !gpio) return -1;
@@ -508,6 +516,7 @@ static int cmd_init(app_t* app, const char** argv)
         ctx->active_slot = (uint8_t)slot;
     }
 
+    ctx->hw_inited = 1;
     return 1;
 }
 #elif __USE_PC__
@@ -516,7 +525,10 @@ static int cmd_init(app_t* app, const char** argv)
     (void)argv;
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
     if (!ctx) return -1;
-    /* PC: device already initialized in gui_open */
+    if (!ctx->hw_inited) {
+        screen_hw_init();       /* 创建 easyx 窗口 — 与 STM32 init 语义对齐 */
+        ctx->hw_inited = 1;
+    }
     return 1;
 }
 #endif
@@ -528,7 +540,7 @@ static int cmd_init(app_t* app, const char** argv)
 static int cmd_pixel(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') || !APPCMD_HAS(argv, 'c')) return -1;
     ksetpixel(&ctx->dev, scr, (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16),
@@ -540,7 +552,7 @@ static int cmd_pixel(app_t* app, const char** argv)
 static int cmd_fill(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -556,7 +568,7 @@ static int cmd_fill(app_t* app, const char** argv)
 static int cmd_rect(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -571,7 +583,7 @@ static int cmd_rect(app_t* app, const char** argv)
 static int cmd_line(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'z') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -586,7 +598,7 @@ static int cmd_line(app_t* app, const char** argv)
 static int cmd_char(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'v') || !APPCMD_HAS(argv, 'c') || !APPCMD_HAS(argv, 'b')) return -1;
@@ -601,7 +613,7 @@ static int cmd_char(app_t* app, const char** argv)
 static int cmd_string(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 's') || !APPCMD_HAS(argv, 'c') || !APPCMD_HAS(argv, 'b')) return -1;
@@ -617,7 +629,7 @@ static int cmd_string(app_t* app, const char** argv)
 static int cmd_circle(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'r') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -632,7 +644,7 @@ static int cmd_circle(app_t* app, const char** argv)
 static int cmd_fcircle(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'r') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -647,7 +659,7 @@ static int cmd_fcircle(app_t* app, const char** argv)
 static int cmd_arc(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'r') || !APPCMD_HAS(argv, 'd') || !APPCMD_HAS(argv, 'c')) return -1;
@@ -663,7 +675,7 @@ static int cmd_arc(app_t* app, const char** argv)
 static int cmd_rrect(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') ||
@@ -681,7 +693,7 @@ static int cmd_rrect(app_t* app, const char** argv)
 static int cmd_frrect(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') ||
@@ -732,7 +744,7 @@ static int cmd_wclear(app_t* app, const char** argv)
 static int cmd_clear(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'c')) return -1;
     KSCCOLOR c = (KSCCOLOR)strtoul(argv[APPCMD_ARG('c')], NULL, 16);
@@ -1008,7 +1020,7 @@ static int cmd_setdrawfunc(app_t* app, const char** argv)
 static int cmd_drawrow(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') || !APPCMD_HAS(argv, 'w')) return -1;
     uint16_t x = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
@@ -1027,7 +1039,7 @@ static int cmd_drawrow(app_t* app, const char** argv)
 static int cmd_image(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h')) return -1;
@@ -1057,7 +1069,7 @@ static int cmd_image(app_t* app, const char** argv)
 static int cmd_ibig(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') || !APPCMD_HAS(argv, 's')) return -1;
@@ -1081,7 +1093,7 @@ static int cmd_ibig(app_t* app, const char** argv)
 static int cmd_ibin(app_t* app, const char** argv)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
         !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h') ||
@@ -1102,7 +1114,7 @@ static int cmd_drawbmp(app_t* app, const char** argv)
 {
     (void)argv;
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return -1;
+    GUI_REQUIRE_HW(ctx);
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
 
     app_t* open_app = appget("open");
@@ -1276,7 +1288,7 @@ static int gui_cmd(app_t* app, const char* cmd, const char** argv)
 static int gui_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 {
     gui_ctx_t* ctx = GUI_CTX(app);
-    if (!ctx || !ctx->active_handle) return 0;
+    if (!ctx || !ctx->hw_inited || !ctx->active_handle) return 0;
     KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
     if (mode == 1 && data)
         kobjdraw(&ctx->dev, scr, (ksc_obj_t*)data);

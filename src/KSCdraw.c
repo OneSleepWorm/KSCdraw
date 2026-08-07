@@ -639,13 +639,19 @@ static uint32_t color16to24(uint16_t color16)
 }
 
 #define SCALE KSC_PC_SCALE
-void screen_init(void* data)
+/* PC 屏幕硬件初始化: 创建 easyx 窗口。仅在 KSCGUI cmd_init 显式调用,
+ * 与 STM32 的 init 语义对齐 (未 init 时绘图命令会被 KSCGUI 的 hw_inited 拦截)。 */
+void screen_hw_init(void)
 {
-    (void)data;
     initgraph(TFTx*SCALE, 320*SCALE);
     setlinecolor(BLACK);
     HWND hwnd = GetHWnd();
     SetWindowPos(hwnd, NULL, 200, 50, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+}
+/* screen_init 保留 k_draw_device 的 .init 契约签名, 但不再自动建窗 */
+void screen_init(void* data)
+{
+    (void)data;
 }
 static uint16_t sSx,sSy,sEx,sEy,sCx,sCy;
 void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
@@ -664,6 +670,7 @@ static void movecursor(void)
 void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
 {
     (void)data;
+    if (GetHWnd() == NULL) return;  /* 未 initgraph 兜底, 防 easyx 崩溃 */
     while(num--){
         KSCCOLOR ncolor = *color++;
         setfillcolor(color16to24(ncolor));

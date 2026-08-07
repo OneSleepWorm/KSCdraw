@@ -9,6 +9,9 @@ extern "C" {
 
 #if __USE_LCD__ ==1
 void screen_init(void* data);
+#if __USE_PC__
+void screen_hw_init(void);
+#endif
 void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num);
 void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
 #include "KSCimg.h"
