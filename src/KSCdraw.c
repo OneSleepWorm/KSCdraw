@@ -25,7 +25,6 @@ void k_window_setpixels(k_draw_device* dev, KSC_window* screen, const KSCCOLOR* 
     dev->setcolorpixels(dev->data, color, num);
 }
 
-static k_draw_device sys_dev;
 static uint8_t draw_buf[_STATICBUF_SIZE];
 
 static inline intxy _abs(intxy x) {
@@ -155,34 +154,6 @@ KSC_mes ksetpixel(k_draw_device* dev,KSC_window* screen, KSCCOLOR color, uintxy 
     dev->setwindows(dev,screen, x, y, 1, 1);
     dev->setpixels(dev, screen, &color, 1);
     return KSC_OK;
-}
-
-k_draw_device* kscreenmount(void){
-    static k_draw_device dev={
-    .data=NULL,
-    .init=screen_init,
-    .setcanvas=screen_setcanvas,
-    .setcolorpixels=screen_setcolorpixels,
-    .setwindows=k_window_setcanvas,
-    .setpixels=k_window_setpixels,
-    };
-    k_draw_device* devp = &dev;
-    devp->init(devp->data);
-    return devp;
-}
-k_draw_device* k_draw_device_init(void){
-    sys_dev.data=NULL;
-    sys_dev.init=screen_init;
-    sys_dev.setcanvas=screen_setcanvas;
-    sys_dev.setcolorpixels=screen_setcolorpixels;
-    sys_dev.setwindows=k_window_setcanvas;
-    sys_dev.setpixels=k_window_setpixels;
-    sys_dev.init(sys_dev.data);
-    return &sys_dev;
-}
-
-k_draw_device* k_draw_device_find(const char* app_name){
-    return &sys_dev;
 }
 
 KSC_window* kscreeninit(k_draw_device* dev,uintxy ssx, uintxy ssy, uintxy width, uintxy height, KSCCOLOR bk){
@@ -607,78 +578,5 @@ void kscreendraw(k_draw_device* dev, KSC_window* screen) {
     kfull(dev, screen, screen->bk, 0, 0, screen->width, screen->height);
     kobjsdraw(dev, screen, screen->objbuf, screen->objnum);
 }
-
-
-/* --- 默认设备屏幕接口 (已由 KSCGUI 接管, 此 stubs 仅保留给 PC 后端) --- */
-/* 注: STM32 上 k_draw_device 的 setcanvas/setcolorpixels 由 kscgui.c
- *     的 gui_setcanvas/gui_pixels 覆盖, 不会走到这里。 */
-#if __USE_STM32__
-void screen_init(void* data) { (void)data; }
-void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
-{
-    (void)data; (void)Gx; (void)Gy; (void)width; (void)height;
-}
-void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
-{
-    (void)data; (void)color; (void)num;
-}
-#endif
-
-#if __USE_PC__
-#include "../third_party/easyx/include/graphics.h"
-#include <stdio.h>
-static uint32_t color16to24(uint16_t color16)
-{
-    uint8_t r5 = (color16 >> 11) & 0x1F;
-    uint8_t g6 = (color16 >> 5) & 0x3F;
-    uint8_t b5 = (color16 & 0x1F);
-    uint8_t r8 = (r5 << 3) | (r5 >> 2);
-    uint8_t g8 = (g6 << 2) | (g6 >> 4);
-    uint8_t b8 = (b5 << 3) | (b5 >> 2);
-    return (b8 << 16) | (g8 << 8) | r8;
-}
-
-#define SCALE KSC_PC_SCALE
-/* PC 屏幕硬件初始化: 创建 easyx 窗口。作为 k_draw_device.init 由 cmd_init 调用,
- * 与 STM32 的 init 语义对齐 (未 init 时绘图命令会被 KSCGUI 的 hw_inited 拦截)。 */
-void screen_hw_init(void* data)
-{
-    (void)data;
-    initgraph(TFTx*SCALE, 320*SCALE);
-    setlinecolor(BLACK);
-    HWND hwnd = GetHWnd();
-    SetWindowPos(hwnd, NULL, 200, 50, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-}
-/* screen_init 保留 k_draw_device 的 .init 契约签名, 但不再自动建窗 */
-void screen_init(void* data)
-{
-    (void)data;
-}
-static uint16_t sSx,sSy,sEx,sEy,sCx,sCy;
-void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
-{
-    (void)data;
-    sSx = Gx; sSy = Gy; sEx=Gx+width-1; sEy=Gy+height-1; sCx=Gx; sCy=Gy;
-}
-static void movecursor(void)
-{
-    sCx++;
-    if(sCx > sEx){
-        sCx = sSx;
-        sCy++;
-    }
-}
-void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num)
-{
-    (void)data;
-    if (GetHWnd() == NULL) return;  /* 未 initgraph 兜底, 防 easyx 崩溃 */
-    while(num--){
-        KSCCOLOR ncolor = *color++;
-        setfillcolor(color16to24(ncolor));
-        solidrectangle(sCx*SCALE,sCy*SCALE,sCx*SCALE+SCALE,sCy*SCALE+SCALE);
-        movecursor();
-    }
-}
-#endif
 
 #endif /* __USE_LCD__ */

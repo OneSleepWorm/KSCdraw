@@ -8,6 +8,7 @@ if(STM32_FIRMWARE)
         ${CMAKE_CURRENT_SOURCE_DIR}/stm32/w25qxx_base.c
         ${CMAKE_CURRENT_SOURCE_DIR}/stm32/tim_clock.c
         ${CMAKE_CURRENT_SOURCE_DIR}/stm32/button16.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/stm32/gui_drv.c
     )
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
@@ -15,5 +16,6 @@ else()
         ${CMAKE_CURRENT_SOURCE_DIR}/pc/w25qxx_base.c
         ${CMAKE_CURRENT_SOURCE_DIR}/pc/tim_clock.c
         ${CMAKE_CURRENT_SOURCE_DIR}/pc/button16.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/pc/gui_drv.c
     )
 endif()

@@ -47,6 +47,8 @@ else()
 
     add_executable(KSCOS src/main.c)
     set_source_files_properties(src/main.c PROPERTIES LANGUAGE CXX)
+    # PC gui_drv 含 easyx 头 (仅支持 C++), 故按 CXX 编译
+    set_source_files_properties(bsp/pc/gui_drv.c PROPERTIES LANGUAGE CXX)
 
     target_compile_definitions(KSCOS PRIVATE __USE_AUTO__=1 __USE_PC__=1 __USE_STM32__=0)
     target_compile_options(KSCOS PRIVATE -Wall -Wextra)

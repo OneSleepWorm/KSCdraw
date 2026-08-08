@@ -8,12 +8,6 @@ extern "C" {
 #endif
 
 #if __USE_LCD__ ==1
-void screen_init(void* data);
-#if __USE_PC__
-void screen_hw_init(void* data);
-#endif
-void screen_setcolorpixels(void* data, const KSCCOLOR* color, uint16_t num);
-void screen_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height);
 #include "KSCimg.h"
 #include "KSCfont.h"
 
@@ -88,15 +82,11 @@ typedef enum KSC_mes{
 #define _r_mask (0x1F)
 #define _d_mask (0xE0)
 
-k_draw_device* k_draw_device_init(void);
-k_draw_device* k_draw_device_find(const char* app_name);
-
 void kscreenclear(k_draw_device* dev,KSC_window* screen);
 void kobjdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj);
 void kobjsdraw(k_draw_device* dev,KSC_window* screen,ksc_obj_t* obj,uint8_t num);
 void kscreendraw(k_draw_device* dev,KSC_window* screen);
 
-k_draw_device* kscreenmount(void);
 KSC_window* kscreeninit(k_draw_device* dev,uintxy ssx,uintxy ssy,uintxy width,uintxy height,KSCCOLOR bk);
 void kscreenfree(k_draw_device* dev,KSC_window* screen);
 

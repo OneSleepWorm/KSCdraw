@@ -118,8 +118,10 @@
 #include "../inc/app.h"
 #include "../inc/KSCdraw.h"
 #include "../inc/KSCOSsystem.h"
+#include "../inc/kscgui.h"
 #include "app_config.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* Cast helper for C++ (PC builds compile as CXX) */
 #define GUI_CTX(app) ((gui_ctx_t*)(app)->app_data)
@@ -130,49 +132,27 @@
     do { if (!(ctx) || !(ctx)->hw_inited || !(ctx)->active_handle) return -1; } while (0)
 
 /* ================================================================
- * Constants (SHARED)
+ * Constants (SHARED) — 别名到 kscgui.h 共享定义
  * ================================================================ */
-#define TFT_W           240
-#define TFT_H           320
-#define TILE_MAX        16
+#define TFT_W           KSCGUI_TFT_W
+#define TFT_H           KSCGUI_TFT_H
+#define TILE_MAX        KSCGUI_TILE_MAX
 
 /* Handle encoding helpers */
-#define TILE_SLOT(h)            ((h) & 0x0F)
-#define TILE_GEN(h)             ((h) >> 4)
-#define TILE_MAKE_HANDLE(g,s)   ((tile_h_t)(((uint8_t)(g) << 4) | (uint8_t)(s)))
+#define TILE_SLOT(h)            KSCGUI_TILE_SLOT(h)
+#define TILE_GEN(h)             KSCGUI_TILE_GEN(h)
+#define TILE_MAKE_HANDLE(g,s)   KSCGUI_TILE_MAKE_HANDLE(g,s)
 
 /* Tile flags */
-#define TILE_F_USED     0x01
-#define TILE_F_VISIBLE  0x02
+#define TILE_F_USED     KSCGUI_TILE_F_USED
+#define TILE_F_VISIBLE  KSCGUI_TILE_F_VISIBLE
 
 /* ================================================================
- * Types (SHARED)
+ * Types (SHARED) — 共享类型来自 kscgui.h, 这里取别名保持兼容
  * ================================================================ */
-typedef struct {
-    KSC_window  win;         /* ssx/ssy/width/height/bk/objbuf/objnum/Mode */
-    uint8_t     gen;         /* generation 1..15, 0=slot free */
-    uint8_t     flags;       /* TILE_F_USED | TILE_F_VISIBLE */
-    uint8_t     z;           /* Z-order, higher = drawn later = on top */
-} tile_t;
+typedef kscgui_tile_t tile_t;
+typedef kscgui_ctx_t  gui_ctx_t;
 
-typedef struct {
-#if __USE_STM32__
-    app_t*          sspi;           /* super_spi (unified) */
-    app_t*          gpio;           /* gpio_port (CS/DC/RST) */
-    int             sspi_inst;      /* active SPI instance: 1 or 2 */
-    int             sspi_dev;       /* device ID on active instance */
-    int             spi_dev[2];     /* [0]=SPI1 dev, [1]=SPI2 dev */
-#endif
-    k_draw_device   dev;
-    tile_t          tiles[TILE_MAX];
-    uint16_t        tile_free_map;  /* bitmap: 1=slot free */
-    tile_h_t        active_handle;  /* 0=none */
-    uint8_t         active_slot;    /* cache of active tile's slot index */
-    uint8_t         hw_inited;      /* 1=cmd_init 已完成屏幕初始化 */
-#if __USE_STM32__
-    uint8_t         pixbuf[512];
-#endif
-} gui_ctx_t;
 
 /* ================================================================
  * Internal helpers (SHARED)
@@ -245,149 +225,17 @@ static uint8_t tile_collect_sorted(gui_ctx_t* ctx, uint8_t* order, uint8_t max)
 }
 
 /* ================================================================
- * STM32: SPI device functions
+ * App lifecycle (SHARED — 平台初始化走 kscgui_drv)
  * ================================================================ */
-#if __USE_STM32__
-static void gui_setcanvas(void* data, uintxy Gx, uintxy Gy, uintxy width, uintxy height)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)data;
-    app_t* sspi = ctx->sspi;
-    uint16_t ex = Gx + width - 1;
-    uint16_t ey = Gy + height - 1;
-    uint8_t ca[] = {Gx >> 8, Gx & 0xFF, ex >> 8, ex & 0xFF};
-    uint8_t ra[] = {Gy >> 8, Gy & 0xFF, ey >> 8, ey & 0xFF};
-    uint8_t cmd;
-    cmd = 0x2A; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
-    appwrite(sspi, ca, 4, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
-    cmd = 0x2B; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
-    appwrite(sspi, ra, 4, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
-    cmd = 0x2C; appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
-}
-
-static void gui_pixels(void* data, const KSCCOLOR* colors, uint16_t num)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)data;
-    app_t* sspi = ctx->sspi;
-    uint8_t* pixbuf = ctx->pixbuf;
-    uint16_t batch = sizeof(ctx->pixbuf) / 2;
-    while (num) {
-        uint16_t n = (num > batch) ? batch : num;
-        uint8_t* p = pixbuf;
-        for (uint16_t i = 0; i < n; i++) {
-            KSCCOLOR c = colors[i];
-            *p++ = c >> 8;
-            *p++ = c & 0xFF;
-        }
-        appwrite(sspi, pixbuf, n * 2, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
-        colors += n;
-        num -= n;
-    }
-}
-
-static void gui_window_setcanvas(k_draw_device* dev, KSC_window* screen,
-    uintxy Gx, uintxy Gy, uintxy width, uintxy height)
-{
-    gui_setcanvas(dev->data, Gx + screen->ssx, Gy + screen->ssy, width, height);
-}
-
-static void gui_window_setpixels(k_draw_device* dev, KSC_window* screen,
-    const KSCCOLOR* color, uint16_t num)
-{
-    (void)screen;
-    gui_pixels(dev->data, color, num);
-}
-
-static void gui_init_st7789(void* data)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)data;
-    app_t* sspi = ctx->sspi;
-    app_t* gpio = ctx->gpio;
-    if (!sspi || !gpio) return;
-
-    /* GPIO 配置: 屏相关引脚 (CS/DC/RST 已由 gui_open sspi_setpin 配置,
-     * 这里配置 DC/RST 直连引脚为推挽输出) */
-    appcmd(gpio, "cfg -p 28 -m 3");
-    appcmd(gpio, "cfg -p 24 -m 3");
-    appcmd(gpio, "cfg -p 25 -m 3");
-    appcmd(gpio, "set -p 28 -v 1");
-    appcmd(gpio, "set -p 24 -v 1");
-    appcmd(gpio, "set -p 25 -v 1");
-
-    appcmd(sspi, "init -i 2");
-
-    /* 硬件复位: RST 拉低→拉高 */
-    appcmd(gpio, "set -p 25 -v 0");
-    sysdelay(100);
-    appcmd(gpio, "set -p 25 -v 1");
-    sysdelay(150);
-
-    appwrite(sspi, NULL, 0, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_PULSE_R1));
-    static const uint8_t init[] = {
-        0x11,0,  0x00,0,  0x3A,1,0x05,  0xC5,1,0x1A,
-        0x36,1,0x00,  0xB2,5,0x05,0x05,0x00,0x33,0x33,
-        0xB7,1,0x05,  0xBB,1,0x3F,  0xC0,1,0x2C,
-        0xC2,1,0x01,  0xC3,1,0x0F,  0xC4,1,0x20,
-        0xC6,1,0x01,  0xD0,2,0xA4,0xA1,
-        0xE8,1,0x03,  0xE9,3,0x09,0x09,0x08,
-        0xE0,14,0xD0,0x05,0x09,0x09,0x08,0x14,0x28,0x33,0x3F,0x07,0x13,0x14,0x28,0x30,
-        0xE1,14,0xD0,0x05,0x09,0x09,0x08,0x03,0x24,0x32,0x32,0x3B,0x14,0x13,0x28,0x2F,
-        0x20,0,  0x00,0,  0x29,0,  0xFF
-    };
-    const uint8_t* p = init;
-    while (*p != 0xFF) {
-        uint8_t cmd = *p++;
-        uint8_t n = *p++;
-        if (cmd == 0x00) { sysdelay(120); continue; }
-        appwrite(sspi, &cmd, 1, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_CMD));
-        if (n) appwrite(sspi, (void*)p, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT));
-        p += n;
-    }
-}
-#endif /* __USE_STM32__ */
-
-/* ================================================================
- * App lifecycle (PLATFORM SPECIFIC)
- * ================================================================ */
-#if __USE_STM32__
 static int gui_open(app_t* app)
 {
     if (app->app_data) return 0;
     gui_ctx_t* ctx = (gui_ctx_t*)osmalloc(sizeof(gui_ctx_t));
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(gui_ctx_t));
-
-    ctx->sspi = app->app0;
-    ctx->gpio = appget("gpio_port");
-    if (ctx->gpio) appopen(ctx->gpio);
     ctx->tile_free_map = 0xFFFF;
 
-    ctx->dev.data = ctx;
-    ctx->dev.init = gui_init_st7789;
-    ctx->dev.setcanvas = gui_setcanvas;
-    ctx->dev.setcolorpixels = gui_pixels;
-    ctx->dev.setwindows = gui_window_setcanvas;
-    ctx->dev.setpixels = gui_window_setpixels;
-    kobjdraw_init(&ctx->dev);
-
-    ctx->spi_dev[0] = -1;
-    ctx->spi_dev[1] = -1;
-    if (!ctx->sspi) { osfree(ctx); return -1; }
-    if (appopen(ctx->sspi) < 0) { osfree(ctx); return -1; }
-
-    ctx->spi_dev[0] = appcmd(ctx->sspi, "reg -i 1");
-    if (ctx->spi_dev[0] < 0) { osfree(ctx); return -1; }
-    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_CS,  4);
-    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_DC,  2);
-    sspi_setpin(ctx->sspi, 1, ctx->spi_dev[0], SSPI_R1,  3);
-
-    ctx->spi_dev[1] = appcmd(ctx->sspi, "reg -i 2");
-    if (ctx->spi_dev[1] < 0) { osfree(ctx); return -1; }
-    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_CS, 12);
-    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_DC,  8);
-    sspi_setpin(ctx->sspi, 2, ctx->spi_dev[1], SSPI_R1,  9);
-
-    ctx->sspi_inst = 2;
-    ctx->sspi_dev  = ctx->spi_dev[1];
+    if (kscgui_drv_open(ctx, app) < 0) { osfree(ctx); return -1; }
 
     {
         int slot = tile_alloc_slot(ctx);
@@ -410,53 +258,12 @@ static int gui_close(app_t* app)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
     if (!ctx) return 0;
-    if (ctx->sspi) appclose(ctx->sspi);
+    kscgui_drv_close(ctx);
     osfree(ctx);
     app->app_data = NULL;
     return 0;
 }
-#elif __USE_PC__
-static int gui_open(app_t* app)
-{
-    if (app->app_data) return 0;
-    gui_ctx_t* ctx = (gui_ctx_t*)osmalloc(sizeof(gui_ctx_t));
-    if (!ctx) return -1;
-    memset(ctx, 0, sizeof(gui_ctx_t));
 
-    ctx->tile_free_map = 0xFFFF;
-
-    k_draw_device* sys_dev = k_draw_device_init();
-    if (!sys_dev) { osfree(ctx); return -1; }
-    memcpy(&ctx->dev, sys_dev, sizeof(k_draw_device));
-    ctx->dev.init = screen_hw_init;   /* dev.init 建 easyx 窗口 (cmd_init 调用) */
-    kobjdraw_init(&ctx->dev);
-
-    {
-        int slot = tile_alloc_slot(ctx);
-        tile_t* t = &ctx->tiles[slot];
-        t->win.ssx = 0;
-        t->win.ssy = 0;
-        t->win.width = TFT_W;
-        t->win.height = TFT_H;
-        t->win.bk = 0;
-        t->z = 0;
-        ctx->active_handle = TILE_MAKE_HANDLE(t->gen, (uint8_t)slot);
-        ctx->active_slot = (uint8_t)slot;
-    }
-
-    app->app_data = ctx;
-    return 0;
-}
-
-static int gui_close(app_t* app)
-{
-    gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    if (!ctx) return 0;
-    osfree(ctx);
-    app->app_data = NULL;
-    return 0;
-}
-#endif
 
 /* ================================================================
  * appcmd: init (SHARED — 硬件初始化走 dev.init ops 表)
@@ -1198,20 +1005,8 @@ static int gui_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 }
 
 /* ================================================================
- * App descriptor (PLATFORM SPECIFIC)
+ * App descriptor (SHARED — 平台依赖由 kscgui_drv 内部 appget)
  * ================================================================ */
-#if __USE_STM32__
-static const papp_ops_t kscgui_ops = {
-    .open  = gui_open,
-    .close = gui_close,
-    .read  = NULL,
-    .write = gui_write,
-    .cmd   = gui_cmd,
-};
-
-REGISTER_APP_EX("KSCGUI", "0", "1\0super_spi", &kscgui_ops,
-    "KSC GUI Manager (Tile-based, 16 slots, Z-order compositing)");
-#elif __USE_PC__
 static const papp_ops_t kscgui_ops = {
     .open  = gui_open,
     .close = gui_close,
@@ -1222,4 +1017,3 @@ static const papp_ops_t kscgui_ops = {
 
 REGISTER_APP("KSCGUI", "0", &kscgui_ops,
     "KSC GUI Manager (Tile-based, 16 slots, Z-order compositing)");
-#endif
