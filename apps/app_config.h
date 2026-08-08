@@ -116,6 +116,10 @@ typedef struct transfer_ctx_t {
     struct app_t*           lfs;
     struct xmodem_server    xdm;
     int                     active;
+    /* 传输缓冲放 heap (osmalloc), 避免 1KB 栈溢出 (AGENTS.md 规则) */
+    uint8_t                 rxbuf[128];   /* XMODEM 接收缓冲 */
+    uint8_t                 pkt[128];     /* 待写入 littlefs 的包缓冲 */
+    const char*             argv_buf[26]; /* appcmd_argv 临时参数槽 */
 } transfer_ctx_t;
 
 #endif

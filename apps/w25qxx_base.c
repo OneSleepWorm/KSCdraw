@@ -210,15 +210,24 @@ static int w25_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 
     case 3:
         if (!count) return -1;
-        w25_wait_ready(ctx);
-        w25_we(ctx);
         {
+            /* W25Q64 页 = 256B。单次 0x02 写跨页会回卷到页首损坏数据,
+             * 必须按页边界拆分 (littlefs cache_size=512 > prog_size=256, 会跨页 prog)。 */
             uint32_t a = ctx->addr;
-            uint8_t hdr[4] = {0x02, (a>>16)&0xFF, (a>>8)&0xFF, a&0xFF};
-            w25_cs_low(ctx);
-            w25_xfer(ctx, hdr, 4, NULL, 0);
-            w25_xfer(ctx, d, count, NULL, 0);
-            w25_cs_high(ctx);
+            uint32_t off = 0;
+            while (off < count) {
+                uint32_t remain = 256 - (a & 0xFF);      /* 本页剩余字节 */
+                uint32_t chunk = (count - off < remain) ? (count - off) : remain;
+                w25_wait_ready(ctx);
+                w25_we(ctx);
+                uint8_t hdr[4] = {0x02, (a>>16)&0xFF, (a>>8)&0xFF, a&0xFF};
+                w25_cs_low(ctx);
+                w25_xfer(ctx, hdr, 4, NULL, 0);
+                w25_xfer(ctx, d + off, (uint16_t)chunk, NULL, 0);
+                w25_cs_high(ctx);
+                a += chunk;
+                off += chunk;
+            }
         }
         w25_wait_ready(ctx);
         return (int)count;

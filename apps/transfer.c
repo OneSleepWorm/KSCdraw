@@ -34,10 +34,9 @@ static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
     app_t* lfs = ctx->lfs;
     if (!uart || !lfs) return -1;
 
-    const char* oa[26] = {0};
-    oa[APPCMD_ARG('p')] = path;
-    oa[APPCMD_ARG('f')] = "0x502";
-    int r = appcmd_argv(lfs, "open", oa);
+    ctx->argv_buf[APPCMD_ARG('p')] = path;
+    ctx->argv_buf[APPCMD_ARG('f')] = "0x502";
+    int r = appcmd_argv(lfs, "open", ctx->argv_buf);
     if (r < 0) return -1;
 
     xmodem_server_init(&ctx->xdm, transfer_tx_byte, app);
@@ -46,24 +45,21 @@ static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
     uint32_t written = 0;
 
     while (ctx->active) {
-        uint8_t rxbuf[128];
-        int n = appread(uart, rxbuf, sizeof(rxbuf), 1);
+        int n = appread(uart, ctx->rxbuf, sizeof(ctx->rxbuf), 1);
         for (int i = 0; i < n; i++)
-            xmodem_server_rx_byte(&ctx->xdm, rxbuf[i]);
+            xmodem_server_rx_byte(&ctx->xdm, ctx->rxbuf[i]);
 
-        uint8_t pkt[XMODEM_MAX_PACKET_SIZE];
         uint32_t blk;
-        int rlen = xmodem_server_process(&ctx->xdm, pkt, &blk, sysgettime());
+        int rlen = xmodem_server_process(&ctx->xdm, ctx->pkt, &blk, sysgettime());
         if (rlen > 0) {
             uint32_t towrite = (uint32_t)rlen;
             if (file_size > 0 && written + towrite > file_size)
                 towrite = file_size - written;
-            lfs->input_data = pkt;
+            lfs->input_data = ctx->pkt;
             char wn[12];
             snprintf(wn, sizeof(wn), "%lu", (unsigned long)towrite);
-            const char* fa[26] = {0};
-            fa[APPCMD_ARG('n')] = wn;
-            int wr = appcmd_argv(lfs, "fwrite", fa);
+            ctx->argv_buf[APPCMD_ARG('n')] = wn;
+            int wr = appcmd_argv(lfs, "fwrite", ctx->argv_buf);
             lfs->input_data = NULL;
             if (wr < 0) {
                 ctx->active = 0;

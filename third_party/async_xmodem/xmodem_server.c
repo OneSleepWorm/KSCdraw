@@ -40,20 +40,22 @@ void xmodem_server_init(xmodem_server* xdm, xmodem_tx_byte_t tx_byte, void* cb_d
 
 void xmodem_server_rx_byte(xmodem_server* xdm, uint8_t byte)
 {
-    if (byte == XMODEM_CAN) {
-        xdm->state = XS_CANCEL;
-        xdm->done = 1;
-        return;
-    }
-
     switch (xdm->state) {
     case XS_IDLE:
+        if (byte == XMODEM_CAN) {
+            xdm->state = XS_CANCEL;
+            xdm->done = 1;
+            return;
+        }
         if (byte == XMODEM_SOH) {
             xdm->state = XS_SEQ;
             xdm->pos = 0;
         } else if (byte == XMODEM_EOT) {
             xdm->state = XS_DONE;
             xdm->done = 1;
+            /* 标准 XMODEM: 接收方收到 EOT 应回 ACK, 发送方确认后结束 */
+            if (xdm->tx_byte)
+                xdm->tx_byte(xdm, XMODEM_ACK, xdm->cb_data);
         }
         break;
 

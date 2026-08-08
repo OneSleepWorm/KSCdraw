@@ -1147,31 +1147,29 @@ static int cmd_drawbmp(app_t* app, const char** argv)
         }
     }
 
-    uint32_t np = (uint32_t)w * h;
-    KSCCOLOR* pixels = (KSCCOLOR*)osmalloc(np * sizeof(KSCCOLOR));
-    if (!pixels) return -1;
-
+    /* 流式逐行推屏: 只分配行缓冲+单行像素缓冲, 不占整图内存 (STM32 RAM 20KB) */
     int row_pad = ((w * 3 + 3) / 4) * 4;
-    uint8_t* row = (uint8_t*)osmalloc(row_pad > 64 ? row_pad : 64);
-    if (!row) { osfree(pixels); return -1; }
+    uint8_t* row = (uint8_t*)osmalloc(row_pad > 64 ? (size_t)row_pad : 64);
+    if (!row) return -1;
+    KSCCOLOR* pixbuf = (KSCCOLOR*)osmalloc((size_t)w * sizeof(KSCCOLOR));
+    if (!pixbuf) { osfree(row); return -1; }
 
     for (int y = 0; y < h; y++) {
-        int got = appread(open_app, row, row_pad, 0);
+        int got = appread(open_app, row, (uint32_t)row_pad, 0);
         if (got < 0) break;
         int dst_y = bottom_up ? (h - 1 - y) : y;
-        KSCCOLOR* dst = pixels + dst_y * w;
         for (int x = 0; x < w && x * 3 + 2 < got; x++) {
             uint8_t b = row[x * 3];
             uint8_t g = row[x * 3 + 1];
             uint8_t r = row[x * 3 + 2];
-            dst[x] = (KSCCOLOR)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+            pixbuf[x] = (KSCCOLOR)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
         }
+        ctx->dev.setwindows(&ctx->dev, scr, 0, (uintxy)dst_y, (uintxy)w, 1);
+        ctx->dev.setpixels(&ctx->dev, scr, pixbuf, (uint16_t)w);
     }
 
+    osfree(pixbuf);
     osfree(row);
-    kdrawimage(&ctx->dev, scr, pixels, 0, 0, (uint8_t)w, (uint8_t)h);
-    osfree(pixels);
-
     return 1;
 }
 

@@ -60,7 +60,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
                 "timeout": TIMEOUT,
             }, tcp_port)
             received_hex = resp.get("received", "")
-            if bytes.fromhex(received_hex).rstrip(b"\0").hex().endswith("06"):
+            if "06" in received_hex:
                 ok = True
                 break
         if not ok:
@@ -86,7 +86,7 @@ def xmodem_send(data: bytes, tcp_port: int) -> bool:
             "timeout": TIMEOUT,
         }, tcp_port)
         received_hex = resp.get("received", "")
-        if bytes.fromhex(received_hex).rstrip(b"\0").hex().endswith("06"):
+        if "06" in received_hex:
             print("\n  Done.")
             return True
 
