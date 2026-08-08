@@ -6,7 +6,6 @@ if(STM32_FIRMWARE)
 endif()
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/uart_serial.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tim_clock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/button16.c
     ${CMAKE_CURRENT_SOURCE_DIR}/snake.c

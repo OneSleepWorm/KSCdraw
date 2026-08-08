@@ -1,6 +1,6 @@
 /**
  * @file    uart_serial.c
- * @note    UART 串口应用 — 统一 USART1/2/3, 依赖 gpio_port
+ * @note    UART 串口应用 — 统一 USART1/2/3, 依赖 gpio_port (STM32 BSP)
  * @flash   ~1806B (Debug, -Og)
  *
  * ============================================================
@@ -59,9 +59,8 @@
  * ============================================================
  */
 
-#include "../inc/app.h"
-#include "../inc/KSCOSsystem.h"
-#if __USE_STM32__
+#include "../../inc/app.h"
+#include "../../inc/KSCOSsystem.h"
 #include "stm32f1xx.h"
 #include <string.h>
 #include <stdlib.h>
@@ -375,169 +374,3 @@ static void uart_irq_handler(int idx)
 void USART1_IRQHandler(void) { uart_irq_handler(0); }
 void USART2_IRQHandler(void) { uart_irq_handler(1); }
 void USART3_IRQHandler(void) { uart_irq_handler(2); }
-
-#elif __USE_PC__
-
-#include <stdio.h>
-#include <string.h>
-
-#define PC_UART_RX_BUF_SIZE  256
-
-typedef struct {
-    char          stdin_path[64];
-    char          stdout_path[64];
-    FILE*         stdin_fp;
-    FILE*         stdout_fp;
-    long          stdin_offset;
-    uint8_t       rx_buf[PC_UART_RX_BUF_SIZE];
-    volatile uint16_t rx_head;
-    volatile uint16_t rx_tail;
-    volatile uint32_t rx_overflow;
-} pc_uart_ctx_t;
-
-static void pc_uart_default_path(char* out, size_t sz, const char* filename)
-{
-    GetModuleFileNameA(NULL, out, (DWORD)sz);
-    for (int i = 0; i < 2; i++) {
-        char* sep = strrchr(out, '\\');
-        if (sep) *sep = '\0';
-    }
-    strcat(out, "\\.data\\");
-    strcat(out, filename);
-}
-
-/* drain stdin.txt into rx ring buffer (STM32 ISR semantics), then truncate */
-static void pc_uart_drain_stdin(pc_uart_ctx_t* ctx)
-{
-    if (!ctx->stdin_fp) return;
-
-    fseek(ctx->stdin_fp, 0, SEEK_END);
-    long size = ftell(ctx->stdin_fp);
-    if (size <= ctx->stdin_offset) return;
-
-    fseek(ctx->stdin_fp, ctx->stdin_offset, SEEK_SET);
-
-    long remaining = size - ctx->stdin_offset;
-    if (remaining > (long)sizeof(ctx->rx_buf)) remaining = (long)sizeof(ctx->rx_buf);
-    if (remaining > 0) {
-        uint8_t tmp[256];
-        if (remaining > (long)sizeof(tmp)) remaining = (long)sizeof(tmp);
-        int n = (int)fread(tmp, 1, (size_t)remaining, ctx->stdin_fp);
-        for (int i = 0; i < n; i++) {
-            uint16_t next = (uint16_t)((ctx->rx_head + 1) & (PC_UART_RX_BUF_SIZE - 1));
-            if (next != ctx->rx_tail) {
-                ctx->rx_buf[ctx->rx_head] = tmp[i];
-                ctx->rx_head = next;
-            } else {
-                ctx->rx_overflow++;
-            }
-        }
-    }
-
-    /* truncate stdin.txt in-place — simulate RXNE flag reset */
-    ctx->stdin_fp = freopen(ctx->stdin_path, "w+b", ctx->stdin_fp);
-    ctx->stdin_offset = 0;
-}
-
-static int pc_uart_open(app_t* app)
-{
-    pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)osmalloc(sizeof(pc_uart_ctx_t));
-    if (!ctx) return -1;
-    memset(ctx, 0, sizeof(pc_uart_ctx_t));
-
-    pc_uart_default_path(ctx->stdin_path, sizeof(ctx->stdin_path), "stdin.txt");
-    pc_uart_default_path(ctx->stdout_path, sizeof(ctx->stdout_path), "stdout.txt");
-
-    ctx->stdin_fp = fopen(ctx->stdin_path, "r+b");
-    if (!ctx->stdin_fp) ctx->stdin_fp = fopen(ctx->stdin_path, "w+b");
-    ctx->stdout_fp = fopen(ctx->stdout_path, "r+b");
-    if (!ctx->stdout_fp) ctx->stdout_fp = fopen(ctx->stdout_path, "w+b");
-
-    app->app_data = ctx;
-    return 0;
-}
-
-static int pc_uart_close(app_t* app)
-{
-    pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (ctx) {
-        if (ctx->stdin_fp)  fclose(ctx->stdin_fp);
-        if (ctx->stdout_fp) fclose(ctx->stdout_fp);
-        osfree(ctx);
-        app->app_data = NULL;
-    }
-    return 0;
-}
-
-static int pc_uart_write(app_t* app, void* data, uint32_t count, uint32_t mode)
-{
-    (void)mode;
-    pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (!ctx || !ctx->stdout_fp || !data || count == 0) return -1;
-
-    fseek(ctx->stdout_fp, 0, SEEK_END);
-    fwrite(data, 1, count, ctx->stdout_fp);
-    fflush(ctx->stdout_fp);
-    return (int)count;
-}
-
-static int pc_uart_read(app_t* app, void* data, uint32_t count, uint32_t mode)
-{
-    (void)mode;
-    pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (!ctx || !data || !count) return 0;
-
-    pc_uart_drain_stdin(ctx);
-
-    uint32_t rd = 0;
-    while (rd < count && ctx->rx_tail != ctx->rx_head) {
-        ((uint8_t*)data)[rd] = ctx->rx_buf[ctx->rx_tail];
-        ctx->rx_tail = (uint16_t)((ctx->rx_tail + 1) & (PC_UART_RX_BUF_SIZE - 1));
-        rd++;
-    }
-    return (int)rd;
-}
-
-static int pc_uart_cmd(app_t* app, const char* cmdname, const char** argv)
-{
-    pc_uart_ctx_t* ctx = (pc_uart_ctx_t*)app->app_data;
-    if (strcmp(cmdname, "print") == 0) {
-        const char* msg = APPCMD_HAS(argv, 'm') ? argv[APPCMD_ARG('m')] : "";
-        printf("%s\n", msg);
-        return 0;
-    }
-    if (strcmp(cmdname, "clear") == 0) {
-        printf("\033[2J\033[H");
-        return 0;
-    }
-    if (strcmp(cmdname, "open") == 0) {
-        if (!ctx) return -1;
-        if (APPCMD_HAS(argv, 'c')) {
-            if (ctx->stdin_fp) fclose(ctx->stdin_fp);
-            strncpy(ctx->stdin_path, argv[APPCMD_ARG('c')], sizeof(ctx->stdin_path) - 1);
-            ctx->stdin_fp = fopen(ctx->stdin_path, "w+b");
-            ctx->stdin_offset = 0;
-        }
-        if (APPCMD_HAS(argv, 'o')) {
-            if (ctx->stdout_fp) fclose(ctx->stdout_fp);
-            strncpy(ctx->stdout_path, argv[APPCMD_ARG('o')], sizeof(ctx->stdout_path) - 1);
-            ctx->stdout_fp = fopen(ctx->stdout_path, "w+b");
-        }
-        return 1;
-    }
-    if (strcmp(cmdname, "close") == 0) return 1;
-    return -1;
-}
-
-static const papp_ops_t pc_uart_ops = {
-    .open  = pc_uart_open,
-    .close = pc_uart_close,
-    .read  = pc_uart_read,
-    .write = pc_uart_write,
-    .cmd   = pc_uart_cmd,
-};
-
-REGISTER_APP_EX("uart_serial", "0", "0", &pc_uart_ops,
-    "PC serial via stdin.txt / stdout.txt");
-
-#endif /* __USE_STM32__ / __USE_PC__ */

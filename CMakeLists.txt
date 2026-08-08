@@ -64,6 +64,7 @@ set_target_properties(KSCOS PROPERTIES
 # === 共享源文件 ===
 add_subdirectory(src)
 add_subdirectory(apps)
+add_subdirectory(bsp)
 
 target_sources(KSCOS PRIVATE
     third_party/littlefs/lfs.c
@@ -71,7 +72,7 @@ target_sources(KSCOS PRIVATE
     third_party/async_xmodem/xmodem_server.c
 )
 target_include_directories(KSCOS PRIVATE
-    inc apps
+    inc apps bsp
     third_party/littlefs
     third_party/async_xmodem
 )
