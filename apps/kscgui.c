@@ -301,6 +301,26 @@ static void gui_init_st7789(void* data)
 {
     gui_ctx_t* ctx = (gui_ctx_t*)data;
     app_t* sspi = ctx->sspi;
+    app_t* gpio = ctx->gpio;
+    if (!sspi || !gpio) return;
+
+    /* GPIO 配置: 屏相关引脚 (CS/DC/RST 已由 gui_open sspi_setpin 配置,
+     * 这里配置 DC/RST 直连引脚为推挽输出) */
+    appcmd(gpio, "cfg -p 28 -m 3");
+    appcmd(gpio, "cfg -p 24 -m 3");
+    appcmd(gpio, "cfg -p 25 -m 3");
+    appcmd(gpio, "set -p 28 -v 1");
+    appcmd(gpio, "set -p 24 -v 1");
+    appcmd(gpio, "set -p 25 -v 1");
+
+    appcmd(sspi, "init -i 2");
+
+    /* 硬件复位: RST 拉低→拉高 */
+    appcmd(gpio, "set -p 25 -v 0");
+    sysdelay(100);
+    appcmd(gpio, "set -p 25 -v 1");
+    sysdelay(150);
+
     appwrite(sspi, NULL, 0, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_PULSE_R1));
     static const uint8_t init[] = {
         0x11,0,  0x00,0,  0x3A,1,0x05,  0xC5,1,0x1A,
@@ -408,6 +428,7 @@ static int gui_open(app_t* app)
     k_draw_device* sys_dev = k_draw_device_init();
     if (!sys_dev) { osfree(ctx); return -1; }
     memcpy(&ctx->dev, sys_dev, sizeof(k_draw_device));
+    ctx->dev.init = screen_hw_init;   /* dev.init 建 easyx 窗口 (cmd_init 调用) */
     kobjdraw_init(&ctx->dev);
 
     {
@@ -438,70 +459,17 @@ static int gui_close(app_t* app)
 #endif
 
 /* ================================================================
- * appcmd: init (PLATFORM SPECIFIC)
+ * appcmd: init (SHARED — 硬件初始化走 dev.init ops 表)
  * ================================================================ */
-#if __USE_STM32__
 static int cmd_init(app_t* app, const char** argv)
 {
     (void)argv;
     gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
     if (!ctx) return -1;
     if (ctx->hw_inited) return 1;   /* 幂等 */
-    app_t* sspi = ctx->sspi;
-    app_t* gpio = ctx->gpio;
-    if (!sspi || !gpio) return -1;
 
-    appcmd(gpio, "cfg -p 28 -m 3");
-    appcmd(gpio, "cfg -p 24 -m 3");
-    appcmd(gpio, "cfg -p 25 -m 3");
-    appcmd(gpio, "set -p 28 -v 1");
-    appcmd(gpio, "set -p 24 -v 1");
-    appcmd(gpio, "set -p 25 -v 1");
-
-    appcmd(sspi, "init -i 2");
-
-    appcmd(gpio, "set -p 25 -v 0");
-    sysdelay(100);
-    appcmd(gpio, "set -p 25 -v 1");
-    sysdelay(150);
-
-    static const uint8_t init_seq[] = {
-        0x11,0,  0x00,0,  0x3A,1,0x05,  0xC5,1,0x1A,
-        0x36,1,0x00,  0xB2,5,0x05,0x05,0x00,0x33,0x33,
-        0xB7,1,0x05,  0xBB,1,0x3F,  0xC0,1,0x2C,
-        0xC2,1,0x01,  0xC3,1,0x0F,  0xC4,1,0x20,
-        0xC6,1,0x01,  0xD0,2,0xA4,0xA1,
-        0xE8,1,0x03,  0xE9,3,0x09,0x09,0x08,
-        0xE0,14,0xD0,0x05,0x09,0x09,0x08,0x14,0x28,0x33,0x3F,0x07,0x13,0x14,0x28,0x30,
-        0xE1,14,0xD0,0x05,0x09,0x09,0x08,0x03,0x24,0x32,0x32,0x3B,0x14,0x13,0x28,0x2F,
-        0x20,0,  0x00,0,  0x29,0,  0xFF
-    };
-
-    const uint8_t* p = init_seq;
-    while (*p != 0xFF) {
-        uint8_t cmd = *p++;
-        uint8_t n = *p++;
-        if (cmd == 0x00) { sysdelay(120); continue; }
-
-        appcmd(gpio, "set -p 24 -v 0");
-        appcmd(gpio, "set -p 28 -v 0");
-        sspi->input_data = (void*)&cmd;
-        sspi->mode_data = NULL;
-        appcmd(sspi, "tx -i 2 -n 1");
-        appcmd(gpio, "set -p 28 -v 1");
-        appcmd(gpio, "set -p 24 -v 1");
-
-        if (n) {
-            sspi_mode_t md = { .len = n };
-            sspi->mode_data = &md;
-            sspi->input_data = (void*)p;
-            appcmd(gpio, "set -p 28 -v 0");
-            appcmd(sspi, "tx -i 2 -m");
-            appcmd(gpio, "set -p 28 -v 1");
-            sspi->mode_data = NULL;
-        }
-        p += n;
-    }
+    if (ctx->dev.init)
+        ctx->dev.init(ctx->dev.data);   /* 平台硬件初始化 (STM32: ST7789 时序; PC: 建窗) */
 
     {
         int slot = tile_alloc_slot(ctx);
@@ -519,19 +487,6 @@ static int cmd_init(app_t* app, const char** argv)
     ctx->hw_inited = 1;
     return 1;
 }
-#elif __USE_PC__
-static int cmd_init(app_t* app, const char** argv)
-{
-    (void)argv;
-    gui_ctx_t* ctx = (gui_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-    if (!ctx->hw_inited) {
-        screen_hw_init();       /* 创建 easyx 窗口 — 与 STM32 init 语义对齐 */
-        ctx->hw_inited = 1;
-    }
-    return 1;
-}
-#endif
 
 /* ================================================================
  * appcmd: drawing primitives (SHARED)
@@ -1014,55 +969,6 @@ static int cmd_setdrawfunc(app_t* app, const char** argv)
 }
 
 /* ================================================================
- * appcmd: image drawing (PLATFORM — STM32 uses direct SPI; PC uses KSCdraw)
- * ================================================================ */
-#if __USE_STM32__
-static int cmd_drawrow(app_t* app, const char** argv)
-{
-    gui_ctx_t* ctx = GUI_CTX(app);
-    GUI_REQUIRE_HW(ctx);
-    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
-    if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') || !APPCMD_HAS(argv, 'w')) return -1;
-    uint16_t x = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
-    uint16_t y = (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
-    uint16_t w = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
-    const uint8_t* img = (const uint8_t*)app->input_data;
-    if (!img) return -1;
-    uint32_t n = (uint32_t)w * 2;
-    if (n > sizeof(ctx->pixbuf)) return -1;
-    gui_window_setcanvas(&ctx->dev, scr, x, y, w, 1);
-    memcpy(ctx->pixbuf, img, n);
-    appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
-    return 1;
-}
-
-static int cmd_image(app_t* app, const char** argv)
-{
-    gui_ctx_t* ctx = GUI_CTX(app);
-    GUI_REQUIRE_HW(ctx);
-    KSC_window* scr = &ctx->tiles[ctx->active_slot].win;
-    if (!APPCMD_HAS(argv, 'x') || !APPCMD_HAS(argv, 'y') ||
-        !APPCMD_HAS(argv, 'w') || !APPCMD_HAS(argv, 'h')) return -1;
-    uint16_t x = (uint16_t)strtoul(argv[APPCMD_ARG('x')], NULL, 0);
-    uint16_t y = (uint16_t)strtoul(argv[APPCMD_ARG('y')], NULL, 0);
-    uint16_t w = (uint16_t)strtoul(argv[APPCMD_ARG('w')], NULL, 0);
-    uint16_t h = (uint16_t)strtoul(argv[APPCMD_ARG('h')], NULL, 0);
-    const uint8_t* img = (const uint8_t*)app->input_data;
-    if (!img) return -1;
-    gui_window_setcanvas(&ctx->dev, scr, x, y, w, h);
-    uint32_t remain = (uint32_t)w * h * 2;
-    while (remain) {
-        uint16_t n = (remain > sizeof(ctx->pixbuf)) ? (uint16_t)sizeof(ctx->pixbuf) : (uint16_t)remain;
-        memcpy(ctx->pixbuf, img, n);
-        appwrite(ctx->sspi, ctx->pixbuf, n, SSPI_MODE(ctx->sspi_inst, ctx->sspi_dev, SSPI_SEND_DAT_DMA));
-        img += n;
-        remain -= n;
-    }
-    return 1;
-}
-#endif /* __USE_STM32__ */
-
-/* ================================================================
  * appcmd: image drawing primitives (SHARED)
  * ================================================================ */
 
@@ -1258,10 +1164,6 @@ static const gui_appcmd_t gui_appcmds[] = {
     {"getobjpool",  cmd_getobjpool},
     {"setdrawfunc", cmd_setdrawfunc},
     {"drawbmp",     cmd_drawbmp},
-#if __USE_STM32__
-    {"drawrow",     cmd_drawrow},
-    {"image",       cmd_image},
-#endif
     {"ibig",        cmd_ibig},
     {"ibin",        cmd_ibin},
 #if __USE_APP_HELP__

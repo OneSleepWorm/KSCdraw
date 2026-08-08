@@ -639,10 +639,11 @@ static uint32_t color16to24(uint16_t color16)
 }
 
 #define SCALE KSC_PC_SCALE
-/* PC 屏幕硬件初始化: 创建 easyx 窗口。仅在 KSCGUI cmd_init 显式调用,
+/* PC 屏幕硬件初始化: 创建 easyx 窗口。作为 k_draw_device.init 由 cmd_init 调用,
  * 与 STM32 的 init 语义对齐 (未 init 时绘图命令会被 KSCGUI 的 hw_inited 拦截)。 */
-void screen_hw_init(void)
+void screen_hw_init(void* data)
 {
+    (void)data;
     initgraph(TFTx*SCALE, 320*SCALE);
     setlinecolor(BLACK);
     HWND hwnd = GetHWnd();
