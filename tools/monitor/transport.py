@@ -7,10 +7,10 @@
   调点里直接 poll，不需要后台线程。SerialTransport (True) 需要后台线程
   捕获 MCU 自发数据（如 reset 后的 boot 日志）。
 
-- FileTransport 启动时不清空 stdout.txt，而是把读偏移对到当前文件尾，
-  这样 KSCOS 先/后启动都能保留 boot 输出。stdin.txt 仍清空（避免吃上次
-  会话留的脏命令）。彻底清空两个文件由 monitor_daemon.Daemon 在 stop
-  路径上统一负责（FileTransport.clear_data()）。
+- FileTransport 启动时不清空 stdout1.txt（PC uart 通道1 输出），而是把读偏移
+  对到当前文件尾，这样 KSCOS 先/后启动都能保留 boot 输出。stdin1.txt 仍清空
+  （避免吃上次会话留的脏命令）。彻底清空两个文件由 monitor_daemon.Daemon
+  在 stop 路径上统一负责（FileTransport.clear_data()）。
 
 - MockTransport 用于单元测试，内存里玩。完全无 IO、无 socket、无文件。
 """

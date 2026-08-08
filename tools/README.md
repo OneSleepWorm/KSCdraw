@@ -41,7 +41,7 @@ tools/
 ┌──────────┐      TCP JSON       ┌──────────┐  FileTransport / SerialTransport  ┌──────────┐
 │  Client  │  ────────────────  │  Daemon  │  ────────────────────────────────  │  KSCOS   │
 │ (CLI一次性)│  ←───────────────  │ (后台常驻)│  ←───────────────────────────────  │ (下位机)  │
-└──────────┘      响应 JSON       └──────────┘     stdin.txt ← / → stdout.txt    └──────────┘
+└──────────┘      响应 JSON       └──────────┘     stdin1.txt ← / → stdout1.txt    └──────────┘
 ```
 
 - 客户端进程发一条 JSON 命令 → daemon 处理 → 通过 transport 投递到下位机。
@@ -52,7 +52,7 @@ tools/
 
 | transport | 后端 | 用途 | 后台 reader |
 |---|---|---|---|
-| `file` (默认) | 本地文件 IO (`.data/stdin.txt` & `stdout.txt`) | PC 端与 `KSCOS.exe` 通信 | 否 |
+| `file` (默认) | 本地文件 IO (`.data/stdin1.txt` & `stdout1.txt`) — PC uart 通道1 | PC 端与 `KSCOS.exe` 通信 | 否 |
 | `serial` | pyserial | 真机与 STM32 通信 | 是（捕获 MCU 自发数据） |
 | `mock` | 内存 `bytearray` | 单元测试 | 否 |
 
@@ -85,7 +85,7 @@ python KSCOS/tools/monitor monitor --timeout 4          # 4 秒后自动退出
 # 文件上传（XMODEM-128）
 python KSCOS/tools/monitor transfer send -l local.bmp -p /remote/path
 
-# 关闭 daemon（同时清空 stdin.txt + stdout.txt）
+# 关闭 daemon（同时清空 stdin1.txt + stdout1.txt）
 python KSCOS/tools/monitor close
 python KSCOS/tools/monitor stop           # 别名
 ```
@@ -109,19 +109,21 @@ python KSCOS/tools/monitor stop           # 别名
 #### File 模式数据流
 
 ```
-client ─TCP→ daemon ─append→ stdin.txt ←─read+truncate─ KSCOS
-client ←TCP─ daemon ←─read-from-offset─ stdout.txt ←─append─ KSCOS
+client ─TCP→ daemon ─append→ stdin1.txt ←─read+truncate─ KSCOS (uart ch1)
+client ←TCP─ daemon ←─read-from-offset─ stdout1.txt ←─append─ KSCOS (uart ch1)
 ```
 
 **路径**（全部锚定 monitor 包位置，与 CWD 无关）：
 
 | 文件 | 用途 |
 |---|---|
-| `KSCOS/.data/stdin.txt` | daemon → KSCOS 命令流（daemon append，KSCOS read + truncate） |
-| `KSCOS/.data/stdout.txt` | KSCOS → daemon 输出流（KSCOS append，daemon 读偏移跟到文件尾） |
+| `KSCOS/.data/stdin1.txt` | daemon → KSCOS 命令流（daemon append，KSCOS read + truncate）— uart 通道1 |
+| `KSCOS/.data/stdout1.txt` | KSCOS → daemon 输出流（KSCOS append，daemon 读偏移跟到文件尾）— uart 通道1 |
+| `KSCOS/.data/stdinN.txt` / `stdoutN.txt` | uart 通道 N（`open -i N` 打开，`dflt -i N` 切换默认）|
 | `KSCOS/.data/flash.bin` | littlefs 持久镜像（跨会话保留，**不**随 daemon close 清空） |
 
 > **⚠️ 严禁删除或清空 `.data/` 下的任何文件。** `flash.bin` 是用户数据持久存储，删除 = 丢失所有文件。
+> daemon `close` 会清空 `stdin1.txt`/`stdout1.txt`（PC uart 默认通道），需与 `KSCOS.exe` 一起重启。
 
 #### KSCOS 命令格式（appcmd）
 
@@ -140,9 +142,9 @@ KSCOS 的命令解析器要求严格的 `-x value` 标志语法：
 
 | 顺序 | 结果 |
 |---|---|
-| daemon 先 → KSCOS 后 | KSCOS 把 boot 输出 ("term start\nterm end\n") 写到 stdout.txt，daemon 把读偏移对到当前文件尾，**保留** boot 输出 |
-| KSCOS 先 → daemon 后 | daemon 启动时把读偏移对到当前文件尾（指向 boot 输出之后），boot 内容仍在 stdout.txt 但 daemon **不会回读**，需直接 `Get-Content` 读文件查看 |
-| `close` 后 | stdin.txt + stdout.txt 同时被清空（flash.bin 保留） |
+| daemon 先 → KSCOS 后 | KSCOS 把 boot 输出 ("term start\nterm end\n") 写到 stdout1.txt，daemon 把读偏移对到当前文件尾，**保留** boot 输出 |
+| KSCOS 先 → daemon 后 | daemon 启动时把读偏移对到当前文件尾（指向 boot 输出之后），boot 内容仍在 stdout1.txt 但 daemon **不会回读**，需直接 `Get-Content` 读文件查看 |
+| `close` 后 | stdin1.txt + stdout1.txt 同时被清空（flash.bin 保留） |
 
 **完整首次流程**（首次使用 + 已 mount 过文件系统）：
 
@@ -150,7 +152,7 @@ KSCOS 的命令解析器要求严格的 `-x value` 标志语法：
 # 1. 启动 daemon
 python KSCOS/tools/monitor open
 
-# 2. 启动 KSCOS（boot 输出会出现在 stdout.txt）
+# 2. 启动 KSCOS（boot 输出会出现在 stdout1.txt）
 Start-Process -WindowStyle Hidden E:\CProject\KSCcomputer\KSCOS\build_ninja\KSCOS.exe
 Start-Sleep 3
 

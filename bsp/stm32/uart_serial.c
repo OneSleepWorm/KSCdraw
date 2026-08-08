@@ -61,9 +61,18 @@
 
 #include "../../inc/app.h"
 #include "../../inc/KSCOSsystem.h"
+#include "../../inc/KSCconfig.h"
 #include "stm32f1xx.h"
 #include <string.h>
 #include <stdlib.h>
+
+/* STM32 硬件只有 USART1/2/3 (3 个)。config 的 __UART_CHANNELS__ 理论上限
+ * 可能超过硬件, 这里钳制到硬件上限, 保证数组不越界。 */
+#define UART_HW_MAX  3
+#if __UART_CHANNELS__ > UART_HW_MAX
+#undef  __UART_CHANNELS__
+#define __UART_CHANNELS__  UART_HW_MAX
+#endif
 
 /* gpio_port mode constants (CRL/CRH nibble encoding) */
 #define UART_TX_MODE  0x0B  /* push-pull output 50MHz */
@@ -80,18 +89,18 @@ typedef struct {
 typedef struct {
     uint8_t          enabled;       /* bit0=USART1 bit1=USART2 bit2=USART3 */
     uint8_t          dflt_inst;     /* ioctl 默认实例 */
-    uint16_t         brr[3];        /* per-instance BRR value */
-    uart_rx_ring_t*  ring[3];
-    app_t*           owner[3];      /* ISR 反向查找 app_t */
+    uint16_t         brr[__UART_CHANNELS__];        /* per-instance BRR value */
+    uart_rx_ring_t*  ring[__UART_CHANNELS__];
+    app_t*           owner[__UART_CHANNELS__];      /* ISR 反向查找 app_t */
     uint32_t         rd_val;
 } uart_ctx_t;
 
-static app_t* uart_owners[4];
+static app_t* uart_owners[__UART_CHANNELS__ + 1];
 
 static USART_TypeDef* uart_reg(uint8_t inst)
 {
     static USART_TypeDef* const map[] = {USART1, USART2, USART3};
-    if (inst < 1 || inst > 3) return NULL;
+    if (inst < 1 || inst > __UART_CHANNELS__) return NULL;
     return map[inst - 1];
 }
 
@@ -166,9 +175,9 @@ static int uart_app_open(app_t* app)
     uart_ctx_t* ctx = (uart_ctx_t*)osmalloc(sizeof(uart_ctx_t));
     if (!ctx) return -1;
     ctx->enabled    = 0;
-    ctx->dflt_inst  = 1;
+    ctx->dflt_inst  = (uint8_t)__UART_DEFAULT_CHANNEL__;
     ctx->rd_val     = 0;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < __UART_CHANNELS__; i++) {
         ctx->brr[i] = uart_brr_compute((uint8_t)(i + 1), UART_BAUD_DEFAULT);
         ctx->ring[i] = NULL;
         ctx->owner[i] = NULL;
@@ -182,7 +191,7 @@ static int uart_app_close(app_t* app)
 {
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!ctx) return -1;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < __UART_CHANNELS__; i++) {
         if (ctx->enabled & (1 << i)) {
             USART_TypeDef* uart = uart_reg(i + 1);
             if (uart) uart->CR1 &= ~(USART_CR1_UE | USART_CR1_RXNEIE);
@@ -233,9 +242,10 @@ static int uart_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 static int cmd_open(app_t* app, const char** argv)
 {
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
-    if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 3) return -1;
+    if (!app || !ctx) return -1;
+    uint32_t inst = APPCMD_HAS(argv, 'i') ? strtoul(argv[APPCMD_ARG('i')], NULL, 0)
+                                          : (uint32_t)ctx->dflt_inst;
+    if (inst < 1 || inst > __UART_CHANNELS__) return -1;
     inst_init(app, (uint8_t)inst);
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     return 1;
@@ -246,7 +256,7 @@ static int cmd_close(app_t* app, const char** argv)
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 3) return -1;
+    if (inst < 1 || inst > __UART_CHANNELS__) return -1;
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     USART_TypeDef* uart = uart_reg((uint8_t)inst);
     if (uart) uart->CR1 &= ~(USART_CR1_UE | USART_CR1_RXNEIE);
@@ -263,7 +273,7 @@ static int cmd_baud(app_t* app, const char** argv)
     if (!app || !ctx || !APPCMD_HAS(argv, 'i') || !APPCMD_HAS(argv, 'b')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
     uint32_t baud = strtoul(argv[APPCMD_ARG('b')], NULL, 0);
-    if (inst < 1 || inst > 3 || baud < 1200) return -1;
+    if (inst < 1 || inst > __UART_CHANNELS__ || baud < 1200) return -1;
     ctx->brr[inst - 1] = uart_brr_compute((uint8_t)inst, baud);
     if (ctx->enabled & (1 << (inst - 1))) {
         USART_TypeDef* uart = uart_reg((uint8_t)inst);
@@ -277,7 +287,7 @@ static int cmd_rxirq(app_t* app, const char** argv)
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 3) return -1;
+    if (inst < 1 || inst > __UART_CHANNELS__) return -1;
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     USART_TypeDef* uart = uart_reg((uint8_t)inst);
     uint32_t en = APPCMD_HAS(argv, 'e') ? strtoul(argv[APPCMD_ARG('e')], NULL, 0) : 1;
@@ -293,7 +303,7 @@ static int cmd_dflt(app_t* app, const char** argv)
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 3) return -1;
+    if (inst < 1 || inst > __UART_CHANNELS__) return -1;
     ctx->dflt_inst = (uint8_t)inst;
     return 1;
 }
@@ -303,7 +313,7 @@ static int cmd_baudrd(app_t* app, const char** argv)  /* rd */
     uart_ctx_t* ctx = (uart_ctx_t*)app->app_data;
     if (!app || !ctx || !APPCMD_HAS(argv, 'i')) return -1;
     uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 3) return -1;
+    if (inst < 1 || inst > __UART_CHANNELS__) return -1;
     if (!(ctx->enabled & (1 << (inst - 1)))) return -1;
     uint32_t pclk = (inst == 1) ? SystemCoreClock : (SystemCoreClock / 2);
     uint32_t baud = pclk / ctx->brr[inst - 1];

@@ -88,7 +88,7 @@ void sys_init(void)
     app_t* uart = appget("uart_serial");
     if (uart) {
         appopen(uart);
-        appcmd(uart, "open -i 1");
+        appcmd(uart, "open");   /* 打开默认通道 (KSCconfig __UART_DEFAULT_CHANNEL__) */
     }
     ksc_console = uart;
     app_t* term = appget("terminal");
@@ -131,6 +131,7 @@ void sys_init(void)
     app_t* con = appget("uart_serial");
     if (con) {
         appopen(con);
+        appcmd(con, "open");   /* 打开默认通道 (KSCconfig __UART_DEFAULT_CHANNEL__) */
         ksc_console = con;
     }
     app_t* term = appget("terminal");

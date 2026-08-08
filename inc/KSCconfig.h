@@ -18,6 +18,9 @@
 #define __USE_UART__ 0
 #define __USE_LITTLEFS__ 1
 #define __USE_KEY__ 0
+//uart 配置 (通道数 / 默认通道 — 平台差异见各平台 bsp)
+#define __UART_CHANNELS__ 3          /* 通道数: STM32=USART1/2/3; PC=stdinN/stdoutN 文件对 */
+#define __UART_DEFAULT_CHANNEL__ 1   /* 默认通道 (ksc_console 绑定, sys_init 打开) */
 //屏幕配置
 #if __USE_LCD__
 // #define __USE_ST7735__ 

@@ -137,7 +137,7 @@ class Daemon:
         finally:
             # stop 路径：用户 close、idle 超时或异常
             if self.transport.supports_clear():
-                self.transport.clear_data()  # 清 stdin.txt + stdout.txt
+                self.transport.clear_data()  # 清 stdin1.txt + stdout1.txt (uart ch1)
             self.transport.close()
             clear_pid(self.pid_file)
             self._log("系统", b"Daemon stopped")

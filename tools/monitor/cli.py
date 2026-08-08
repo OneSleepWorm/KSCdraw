@@ -23,8 +23,10 @@ DEFAULT_TCP_PORT = 12345
 DEFAULT_IDLE = 60
 DEFAULT_LOG = os.path.join(_SCRIPT_DIR, "logs", "serial.log")
 DEFAULT_PID_FILE = os.path.join(_SCRIPT_DIR, "logs", "daemon.pid")
-_FILE_CMD_PATH = os.path.join(_SCRIPT_DIR, "..", ".data", "stdin.txt")
-_FILE_OUT_PATH = os.path.join(_SCRIPT_DIR, "..", ".data", "stdout.txt")
+# PC uart 多通道命名: 通道 N = stdinN.txt / stdoutN.txt (见 bsp/pc/uart_serial.c)。
+# daemon 默认对接通道 1。
+_FILE_CMD_PATH = os.path.join(_SCRIPT_DIR, "..", ".data", "stdin1.txt")
+_FILE_OUT_PATH = os.path.join(_SCRIPT_DIR, "..", ".data", "stdout1.txt")
 
 
 def _add_transport_args(p, include_data_paths: bool = False):
