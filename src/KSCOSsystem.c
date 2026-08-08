@@ -38,6 +38,11 @@ void sysdelay(uint32_t ms)
     while (sys_tick_ms - start < ms);
 }
 
+void oswait_idle(void)
+{
+    __WFI();   /* 休眠等待中断唤醒 (省电) */
+}
+
 uint32_t sysgettime(void)
 {
     return sys_tick_ms;
@@ -125,6 +130,8 @@ volatile uint32_t KSCOSsystem_Clock = 0;
 
 void sysdelay(uint32_t ms) { Sleep(ms); }
 uint32_t sysgettime(void) { return GetTickCount(); }
+
+void oswait_idle(void) { Sleep(1); }   /* 让出 CPU */
 
 void sys_init(void)
 {

@@ -36,6 +36,7 @@ void* osmalloc(size_t size);
 void osfree(void* ptr);
 void* oscalloc(size_t num, size_t size);
 void osdelay(uint32_t ms);
+void oswait_idle(void);   /* 阻塞空闲等待: STM32=WFI 休眠, PC=让出 CPU */
 
 
 void sys_init(void);

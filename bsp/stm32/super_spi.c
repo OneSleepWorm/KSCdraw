@@ -91,9 +91,9 @@
  *   appfree(spi);
  */
 
-#include "../inc/app.h"
-#include "../inc/KSCOSsystem.h"
-#include "app_config.h"
+#include "../../inc/app.h"
+#include "../../inc/KSCOSsystem.h"
+#include "../../apps/app_config.h"
 #include <string.h>
 #include "stm32f1xx.h"
 

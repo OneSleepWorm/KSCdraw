@@ -1,9 +1,3 @@
-if(STM32_FIRMWARE)
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/super_spi.c
-    )
-endif()
-
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/snake.c
     ${CMAKE_CURRENT_SOURCE_DIR}/kscgui.c

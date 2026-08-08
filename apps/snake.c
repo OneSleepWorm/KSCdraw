@@ -422,13 +422,8 @@ static int snake_init(app_t* app, int mode)
 
     if (mode == 1) {
         /* 阻塞模式: 等待 K0 退出 */
-        while (ctx->running) {
-#if __USE_STM32__
-            __asm volatile("wfi");
-#elif __USE_PC__
-            Sleep(100);
-#endif
-        }
+        while (ctx->running)
+            oswait_idle();
     }
     /* mode=2 (中断模式): 直接返回, 游戏在 TIM4 ISR 中运行 */
 
