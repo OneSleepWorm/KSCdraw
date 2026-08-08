@@ -1,12 +1,12 @@
 /**
  * @file    button16.c
- * @note    4×4 矩阵键盘扫描应用 (STM32 + PC)
+ * @note    4×4 矩阵键盘扫描应用 (STM32 BSP, gpio_port 矩阵扫描)
  *
  * ============================================================
  * 基本信息
  * ============================================================
  * 注册名:  button16
- * 平台:    STM32 (__USE_STM32__) + PC (__USE_PC__)
+ * 平台:    STM32 (__USE_STM32__)
  *
  * ============================================================
  * 官方 4×4 键位布局 (1-indexed)
@@ -39,10 +39,11 @@
  * 完整接口见 `appwrite / appread mode 表` 及 `cmd 表`。
  */
 
-#include "../inc/app.h"
-#include "../inc/KSCOSsystem.h"
+#include "../../inc/app.h"
+#include "../../inc/KSCOSsystem.h"
 #include <string.h>
 #include <stdlib.h>
+#include "stm32f1xx.h"
 
 /* ========================================================================
  *  共享常量
@@ -120,12 +121,8 @@ static uint32_t ev_pop(btn16_cpx_t* c)
 }
 
 /* ========================================================================
- *  STM32 平台 — 键扫描
+ *  STM32 平台 — 矩阵键盘扫描 (通过 gpio_port)
  * ======================================================================== */
-
-#if __USE_STM32__
-
-#include "stm32f1xx.h"
 
 static uint32_t keypad_scan(app_t* gpio)
 {
@@ -140,44 +137,17 @@ static uint32_t keypad_scan(app_t* gpio)
     return raw;
 }
 
-/* ========================================================================
- *  PC 平台 — 键扫描
- * ======================================================================== */
-
-#elif __USE_PC__
-
-/*   0:'1'=quit  1:'2'  2:'3'  3:'4'
- *   4:'Q'  5:'W'  6:'E'=up  7:'R'
- *   8:'A'  9:'S'=left 10:'D'=OK 11:'F'=right
- *  12:'Z' 13:'X' 14:'C'=down 15:'V'
- *
- *  2-indexed: 在 PC 上模拟 STM32 官方布局, 键位索引 = pc_key_map[i]
- */
-static const int pc_key_map[16] = {
-    '1', '2', '3', '4',
-    'Q', 'W', 'E', 'R',
-    'A', 'S', 'D', 'F',
-    'Z', 'X', 'C', 'V'
-};
-
-static uint32_t keypad_scan(app_t* gpio)
+static void btn16_hw_init(app_t* app)
 {
-    (void)gpio;
-    /* ensure message queue exists for GetAsyncKeyState */
-    static int msgq_init = 0;
-    if (!msgq_init) {
-        MSG msg;
-        PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE);
-        msgq_init = 1;
+    if (app->app0) appopen(app->app0);
+    for (int p = 0; p < 8; p++) {
+        uint32_t nib = (p < 4) ? 0x3 : 0x8;
+        appwrite(app->app0, NULL, (p << 4) | nib, 1);
     }
-    uint32_t raw = 0;
-    for (int i = 0; i < 16; i++)
-        if (GetAsyncKeyState(pc_key_map[i]) & 0x8000)
-            raw |= (1U << i);
-    return raw;
+    uint32_t zero = 0;
+    appwrite(app->app0, &zero, 0x00FF, 3);
+    kscprintf("button16: gpio_port init done, PORTA pins 0-7\r\n");
 }
-
-#endif
 
 /* ========================================================================
  *  共享 — 定时器扫描回调 (复杂模式 + 简单模式)
@@ -187,9 +157,7 @@ static void* scan_cb(void* data)
 {
     app_t* app = (app_t*)data;
     btn16_data_t* d = (btn16_data_t*)app->app_data;
-#if __USE_STM32__
     if (!d->hw_inited) return NULL;
-#endif
 
     uint32_t raw = keypad_scan(app->app0);
 
@@ -314,7 +282,7 @@ static int btn16_read(app_t* app, void* data, uint32_t count, uint32_t mode)
 }
 
 /* ========================================================================
- *  共享 — appwrite (mode=1 需平台 #if)
+ *  共享 — appwrite (mode=1 初始化调平台 hw_init)
  * ======================================================================== */
 
 static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
@@ -322,16 +290,7 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
     btn16_data_t* d = (btn16_data_t*)app->app_data;
 
     if (mode == 1 && !d->hw_inited) {
-#if __USE_STM32__
-        if (app->app0) appopen(app->app0);
-        for (int p = 0; p < 8; p++) {
-            uint32_t nib = (p < 4) ? 0x3 : 0x8;
-            appwrite(app->app0, NULL, (p << 4) | nib, 1);
-        }
-        uint32_t zero = 0;
-        appwrite(app->app0, &zero, 0x00FF, 3);
-        kscprintf("button16: gpio_port init done, PORTA pins 0-7\r\n");
-#endif
+        btn16_hw_init(app);
         uint32_t raw = keypad_scan(app->app0);
         d->latest_keys = raw;
         if (d->cpx) d->cpx->prev_raw = raw;
@@ -380,7 +339,7 @@ static int btn16_write(app_t* app, void* data, uint32_t count, uint32_t mode)
 }
 
 /* ========================================================================
- *  共享 — cmd 处理 (cmd_init 需平台 #if)
+ *  共享 — cmd 处理
  * ======================================================================== */
 
 static int cmd_init(app_t* app, const char** argv)
@@ -388,15 +347,7 @@ static int cmd_init(app_t* app, const char** argv)
     (void)argv;
     btn16_data_t* d = (btn16_data_t*)app->app_data;
     if (!app || !d || d->hw_inited) return -1;
-#if __USE_STM32__
-    if (app->app0) appopen(app->app0);
-    for (int p = 0; p < 8; p++) {
-        uint32_t nib = (p < 4) ? 0x3 : 0x8;
-        appwrite(app->app0, NULL, (p << 4) | nib, 1);
-    }
-    uint32_t zero = 0;
-    appwrite(app->app0, &zero, 0x00FF, 3);
-#endif
+    btn16_hw_init(app);
     uint32_t raw = keypad_scan(app->app0);
     d->latest_keys = raw;
     if (d->cpx) d->cpx->prev_raw = raw;
@@ -521,10 +472,5 @@ static const papp_ops_t btn16_ops = {
     .cmd   = btn16_app_cmd,
 };
 
-#if __USE_STM32__
 REGISTER_APP_EX("button16", "0", "1\0gpio_port",
                 &btn16_ops, "4x4 matrix keypad scanner");
-#elif __USE_PC__
-REGISTER_APP_EX("button16", "0", "0",
-                &btn16_ops, "4x4 matrix keypad scanner (PC: GetAsyncKeyState)");
-#endif

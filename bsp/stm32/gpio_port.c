@@ -1,6 +1,6 @@
 /**
  * @file    gpio_port.c
- * @note    统一 GPIO 端口 App — 全局引脚号直操寄存器
+ * @note    统一 GPIO 端口 App — 全局引脚号直操寄存器 (STM32 BSP)
  * @flash   ~1304B (Debug, -Og)
  *
  * ============================================================
@@ -62,11 +62,10 @@
  *   appread(gpio, &v, 4, 2);                    // v  = PA4 电平 (0/1)
  */
 
-#include "../inc/app.h"
-#include "../inc/KSCOSsystem.h"
+#include "../../inc/app.h"
+#include "../../inc/KSCOSsystem.h"
 #include <stdlib.h>
 #include <string.h>
-#if __USE_STM32__
 #include "stm32f1xx.h"
 
 #define PORT_OF(pin)  ((pin) >> 4)
@@ -373,5 +372,3 @@ static const papp_ops_t gpio_app_ops = {
 
 REGISTER_APP("gpio_port", "0", &gpio_app_ops,
     "Unified GPIO port driver (global pin# 0-15=A 16-31=B 32-47=C)");
-
-#endif

@@ -1,6 +1,6 @@
 /**
  * @file    tim_clock.c
- * @note    定时器时钟应用 — 统一 TIM1/2/3/4
+ * @note    定时器时钟应用 — 统一 TIM1/2/3/4 (STM32 BSP)
  * @flash   ~1402B (Debug, -Og)
  *
  * ============================================================
@@ -8,7 +8,7 @@
  * ============================================================
  * 注册名:  tim_clock
  * dep:     NULL
- * 平台:    STM32 + PC
+ * 平台:    STM32 (__USE_STM32__)
  *
  * ============================================================
  * 使用方法
@@ -27,35 +27,19 @@
  *   op=2: count>0 启动, count=0 停止
  */
 
-#include "../inc/app.h"
-#include "../inc/KSCOSsystem.h"
+#include "../../inc/app.h"
+#include "../../inc/KSCOSsystem.h"
 #include <string.h>
 #include <stdlib.h>
-
-#if __USE_STM32__
 #include "stm32f1xx.h"
-#endif
 
 typedef struct {
     void_func_t cb[4];
     void*       ud[4];
     uint32_t    period[4];
-#if __USE_STM32__
     uint8_t     enabled;
     uint32_t    rd_val;
-#endif
-#if __USE_PC__
-    volatile uint8_t running[4];
-    HANDLE      thread;
-    volatile uint8_t thread_run;
-    uint32_t    counter[4];
-#endif
 } tim_ctx_t;
-
-/* ========================================================================
- *  STM32 平台
- * ======================================================================== */
-#if __USE_STM32__
 
 static app_t* tim_owners[4];
 
@@ -291,221 +275,7 @@ void TIM3_IRQHandler(void)    { tim_irq_handler(2); }
 void TIM4_IRQHandler(void)    { tim_irq_handler(3); }
 
 /* ========================================================================
- *  PC 平台
- * ======================================================================== */
-#elif __USE_PC__
-
-static DWORD WINAPI tim_pc_thread(LPVOID param)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)param;
-    while (ctx->thread_run) {
-        DWORD t0 = GetTickCount();
-        DWORD sleep_ms = 1000;
-        for (int i = 0; i < 4; i++) {
-            if (ctx->running[i] && ctx->period[i] > 0) {
-                uint32_t rem = ctx->period[i] - ctx->counter[i];
-                if (rem < sleep_ms) sleep_ms = rem;
-            }
-        }
-        if (sleep_ms < 1) sleep_ms = 1;
-        Sleep(sleep_ms);
-
-        DWORD elapsed = GetTickCount() - t0;
-        for (int i = 0; i < 4; i++) {
-            if (ctx->running[i] && ctx->period[i] > 0) {
-                ctx->counter[i] += elapsed;
-                while (ctx->running[i] && ctx->counter[i] >= ctx->period[i]) {
-                    ctx->counter[i] -= ctx->period[i];
-                    if (ctx->cb[i])
-                        ctx->cb[i](ctx->ud[i]);
-                }
-            }
-        }
-    }
-    return 0;
-}
-
-static int tim_app_open(app_t* app)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)osmalloc(sizeof(tim_ctx_t));
-    if (!ctx) return -1;
-    memset(ctx, 0, sizeof(tim_ctx_t));
-    ctx->thread = NULL;
-    ctx->thread_run = 0;
-    app->app_data = ctx;
-    return 0;
-}
-
-static int tim_app_close(app_t* app)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-    ctx->thread_run = 0;
-    if (ctx->thread) {
-        WaitForSingleObject(ctx->thread, 500);
-        CloseHandle(ctx->thread);
-        ctx->thread = NULL;
-    }
-    osfree(ctx);
-    app->app_data = NULL;
-    return 0;
-}
-
-static int tim_app_write(app_t* app, void* data, uint32_t count, uint32_t mode)
-{
-    (void)data;
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!ctx) return -1;
-
-    uint32_t inst = mode >> 4;
-    uint32_t op   = mode & 0x0F;
-    if (inst < 1 || inst > 4) return -1;
-    int i = (int)(inst - 1);
-
-    switch (op) {
-    case 0:
-        return 1;
-
-    case 1:
-        ctx->period[i] = count;
-        ctx->counter[i] = 0;
-        return 1;
-
-    case 2:
-        if (count) {
-            ctx->cb[i] = app->user_func;
-            ctx->ud[i] = app->input_data;
-            ctx->running[i] = 1;
-            ctx->counter[i] = 0;
-            if (!ctx->thread_run) {
-                ctx->thread_run = 1;
-                ctx->thread = CreateThread(NULL, 0, tim_pc_thread,
-                                           ctx, 0, NULL);
-                if (!ctx->thread) {
-                    ctx->thread_run = 0;
-                    ctx->running[i] = 0;
-                    return -1;
-                }
-            }
-        } else {
-            ctx->running[i] = 0;
-            int any = 0;
-            for (int j = 0; j < 4; j++)
-                if (ctx->running[j]) { any = 1; break; }
-            if (!any && ctx->thread_run) {
-                ctx->thread_run = 0;
-                if (ctx->thread) {
-                    WaitForSingleObject(ctx->thread, 500);
-                    CloseHandle(ctx->thread);
-                    ctx->thread = NULL;
-                }
-            }
-        }
-        return 1;
-
-    default:
-        return -1;
-    }
-}
-
-static int tim_app_read(app_t* app, void* data, uint32_t count, uint32_t mode)
-{
-    (void)count;
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!ctx || !data) return -1;
-
-    uint32_t inst = mode;
-    if (inst < 1 || inst > 4) return -1;
-
-    *(uint32_t*)data = ctx->period[inst - 1];
-    return 4;
-}
-
-static int cmd_regcb(app_t* app, const char** argv)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 4) return -1;
-    int i = (int)(inst - 1);
-    ctx->cb[i] = app->user_func;
-    ctx->ud[i] = app->input_data;
-    ctx->running[i] = 1;
-    if (!ctx->thread_run) {
-        ctx->thread_run = 1;
-        ctx->thread = CreateThread(NULL, 0, tim_pc_thread, ctx, 0, NULL);
-    }
-    return 1;
-}
-
-static int cmd_period(app_t* app, const char** argv)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!app || !APPCMD_HAS(argv, 'i') || !APPCMD_HAS(argv, 't')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    uint32_t ms   = strtoul(argv[APPCMD_ARG('t')], NULL, 0);
-    if (inst < 1 || inst > 4) return -1;
-    int i = (int)(inst - 1);
-    ctx->period[i] = ms;
-    ctx->counter[i] = 0;
-    return 1;
-}
-
-static int cmd_start(app_t* app, const char** argv)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 4) return -1;
-    int i = (int)(inst - 1);
-    ctx->cb[i] = app->user_func;
-    ctx->ud[i] = app->input_data;
-    ctx->running[i] = 1;
-    ctx->counter[i] = 0;
-    if (!ctx->thread_run) {
-        ctx->thread_run = 1;
-        ctx->thread = CreateThread(NULL, 0, tim_pc_thread, ctx, 0, NULL);
-    }
-    return 1;
-}
-
-static int cmd_stop(app_t* app, const char** argv)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 4) return -1;
-    int i = (int)(inst - 1);
-    ctx->running[i] = 0;
-    int any = 0;
-    for (int j = 0; j < 4; j++)
-        if (ctx->running[j]) { any = 1; break; }
-    if (!any && ctx->thread_run) {
-        ctx->thread_run = 0;
-        if (ctx->thread) {
-            WaitForSingleObject(ctx->thread, 500);
-            CloseHandle(ctx->thread);
-            ctx->thread = NULL;
-        }
-    }
-    return 1;
-}
-
-static int cmd_timrd(app_t* app, const char** argv)
-{
-    tim_ctx_t* ctx = (tim_ctx_t*)app->app_data;
-    if (!app || !APPCMD_HAS(argv, 'i')) return -1;
-    uint32_t inst = strtoul(argv[APPCMD_ARG('i')], NULL, 0);
-    if (inst < 1 || inst > 4) return -1;
-    if (app->output_data)
-        *(uint32_t*)app->output_data = ctx->period[inst - 1];
-    return 1;
-}
-
-#endif  /* __USE_PC__ */
-
-/* ========================================================================
- *  共享部分 — cmd 派发表 + REGISTER_APP
+ *  cmd 派发表 + REGISTER_APP
  * ======================================================================== */
 typedef int (*tim_cmd_h)(app_t*, const char**);
 typedef struct { const char* name; tim_cmd_h handler; } tim_cmd_t;
