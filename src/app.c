@@ -1,5 +1,6 @@
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
+#include "../inc/kscsystem.h"
 #include <string.h>
 
 #ifndef CALLBACK_NULL_FUNC
@@ -77,8 +78,18 @@ app_t* appget(const char* name)
         if (!papp->base || strcmp(name, papp->base->app_name) != 0)
             continue;
 
-        app_t* app = (app_t*)osmalloc(sizeof(app_t));
-        if (!app) return NULL;
+        /* system app: 固定地址, 不走 osmalloc。A4: 入缓存前直接 open */
+        int is_system = (strcmp(name, "system") == 0);
+
+        app_t* app;
+        if (is_system) {
+            app = SYSTEMAPP;
+            if (!app) return NULL;
+            memset(app, 0, sizeof(app_t));
+        } else {
+            app = (app_t*)osmalloc(sizeof(app_t));
+            if (!app) return NULL;
+        }
 
         app->papp        = papp;
         app->app0        = NULL;
@@ -98,19 +109,26 @@ app_t* appget(const char* name)
             app_t* appslots[4] = {NULL, NULL, NULL, NULL};
             if (resolve_app_deps(papp->app_dep_str, appslots) < 0) {
                 if (appslots[0]) appfree(appslots[0]);
-                osfree(app);
+                if (!is_system) osfree(app);
                 return NULL;
             }
             app->app0 = appslots[0]; app->app1 = appslots[1];
             app->app2 = appslots[2]; app->app3 = appslots[3];
         }
 
-        /* 3. 入缓存链表 */
+        /* A4 补丁: system 在入缓存前直接 open (缓存节点未建, 不能走 appopen) */
+        if (is_system && papp->ops->open)
+            papp->ops->open(app);
+
+        /* 3. 入缓存链表 (system 已 open, 其 malloc 分发可用) */
         node = (app_cache_node_t*)osmalloc(sizeof(app_cache_node_t));
-        if (!node) { osfree(app); return NULL; }
+        if (!node) {
+            if (!is_system) osfree(app);
+            return NULL;
+        }
         node->app       = app;
         node->get_refs  = 1;
-        node->app_state = 0;
+        node->app_state = is_system ? APP_STATE_OPENED : 0;
         node->next      = _app_cache;
         _app_cache      = node;
 
@@ -123,6 +141,10 @@ int appopen(app_t* app)
 {
     if (!app) return -1;
     if (!app->app_ops || !app->app_ops->open) return -1;
+
+    /* system app: 已由 appget 自动 open (A4), 幂等返回 */
+    if (app == SYSTEMAPP)
+        return 0;
 
     app_cache_node_t* node = cache_find_by_app(app);
     if (!node) return -1;
@@ -137,6 +159,11 @@ int appopen(app_t* app)
 int appclose(app_t* app)
 {
     if (!app) return -1;
+
+    /* system app 禁止关闭 */
+    if (app == SYSTEMAPP)
+        return -1;
+
     if (!app->app_ops || !app->app_ops->close) return -1;
 
     app_cache_node_t* node = cache_find_by_app(app);

@@ -1,14 +1,39 @@
 #include "../inc/KSCOSsystem.h"
+#include "../inc/kscsystem.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 /* ================================================================
- * 共享实现 (所有平台)
+ * 共享实现 (所有平台) — 系统服务经 system app 分发
  * ================================================================ */
 
-void* osmalloc(size_t size) { return malloc(size); }
-void osfree(void* ptr) { free(ptr); }
-void* oscalloc(size_t num, size_t size) { return calloc(num, size); }
+/* ================================================================
+ * 内存服务 — 经 system app 分发 (mempool)
+ * ================================================================ */
+
+void* osmalloc(size_t size)
+{
+    void* p = NULL;
+    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
+        appwrite(SYSTEMAPP, &p, (uint32_t)size, 0);   /* mode=0: malloc */
+    return p;
+}
+
+void osfree(void* ptr)
+{
+    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
+        appwrite(SYSTEMAPP, &ptr, sizeof(ptr), 1);    /* mode=1: free */
+}
+
+void* oscalloc(size_t num, size_t size)
+{
+    void* p = osmalloc(num * size);
+    if (p) memset(p, 0, num * size);
+    return p;
+}
+
 void osdelay(uint32_t ms) { sysdelay(ms); }
 
 ki8 KSCOS_default_Error_Handler(void* data)
@@ -19,144 +44,44 @@ ki8 KSCOS_default_Error_Handler(void* data)
 }
 
 /* ================================================================
- * STM32 平台
+ * 全局 (共享定义)
  * ================================================================ */
-#if __USE_STM32__
-
-#include "stm32f1xx.h"
-#include "app.h"
-#include <stdio.h>
-
 app_t* ksc_console = NULL;
 app_t* ksc_term = NULL;
-volatile uint32_t sys_tick_ms = 0;
 volatile uint32_t KSCOSsystem_Clock = 0;
+
+/* ================================================================
+ * 系统服务 — 经 system app 二进制接口分发 (快, 无字符串解析)
+ * ================================================================ */
 
 void sysdelay(uint32_t ms)
 {
-    uint32_t start = sys_tick_ms;
-    while (sys_tick_ms - start < ms);
-}
-
-void oswait_idle(void)
-{
-    __WFI();   /* 休眠等待中断唤醒 (省电) */
+    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
+        appwrite(SYSTEMAPP, &ms, sizeof(ms), 2);   /* mode=2: delay */
 }
 
 uint32_t sysgettime(void)
 {
-    return sys_tick_ms;
+    uint32_t t = 0;
+    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->read)
+        appread(SYSTEMAPP, &t, sizeof(t), 0);      /* mode=0: gettime */
+    return t;
 }
 
-static void pll_init(void)
+void oswait_idle(void)
 {
-    uint32_t mul = 9;
-    uint32_t sysclk = 8000000 * mul;
-    uint32_t latency;
-    if (sysclk <= 24000000)
-        latency = 0;
-    else if (sysclk <= 48000000)
-        latency = FLASH_ACR_LATENCY_1;
-    else
-        latency = FLASH_ACR_LATENCY_2;
-    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | latency;
-
-    RCC->CR |= RCC_CR_HSEON;
-    while (!(RCC->CR & RCC_CR_HSERDY));
-
-    uint32_t pllmul = (mul - 2) << 18;
-    RCC->CFGR = (RCC->CFGR & ~(RCC_CFGR_PLLSRC | RCC_CFGR_PLLMULL))
-              | RCC_CFGR_PLLSRC | pllmul;
-
-    RCC->CR |= RCC_CR_PLLON;
-    while (!(RCC->CR & RCC_CR_PLLRDY));
-
-    RCC->CFGR = (RCC->CFGR & ~(RCC_CFGR_HPRE | RCC_CFGR_PPRE1 | RCC_CFGR_PPRE2 | RCC_CFGR_SW))
-              | RCC_CFGR_HPRE_DIV1 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV1
-              | RCC_CFGR_SW_PLL;
-    while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
-
-    KSCOSsystem_Clock = sysclk;
-    SystemCoreClock = sysclk;
-    SysTick_Config(SystemCoreClock / 1000);
-    NVIC_SetPriorityGrouping(4);
-}
-
-void sys_init(void)
-{
-    RCC->APB2ENR |= RCC_APB2ENR_AFIOEN;
-    AFIO->MAPR |= 1;
-    __DSB();
-
-    pll_init();
-
-    app_t* uart = appget("uart_serial");
-    if (uart) {
-        appopen(uart);
-        appcmd(uart, "open");   /* 打开默认通道 (KSCconfig __UART_DEFAULT_CHANNEL__) */
-    }
-    ksc_console = uart;
-    app_t* term = appget("terminal");
-    if (term) {
-        appopen(term);
-        ksc_term = term;
-    }
-}
-
-
-void KSCOSSystemClock_Init(unsigned char clock_type)
-{
-    (void)clock_type;
-    KSCOSsystem_Clock = 8000000;
+    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
+        appwrite(SYSTEMAPP, NULL, 0, 3);           /* mode=3: idle */
 }
 
 void KSCOS_Error_Handler(void)
 {
-    __disable_irq();
     while (1);
 }
 
 /* ================================================================
- * PC 平台
+ * 控制台输出 (共享, 经 ksc_console 转发)
  * ================================================================ */
-#elif __USE_PC__
-
-#include <stdio.h>
-#include <windows.h>
-
-app_t* ksc_console = NULL;
-app_t* ksc_term    = NULL;
-volatile uint32_t KSCOSsystem_Clock = 0;
-
-void sysdelay(uint32_t ms) { Sleep(ms); }
-uint32_t sysgettime(void) { return GetTickCount(); }
-
-void oswait_idle(void) { Sleep(1); }   /* 让出 CPU */
-
-void sys_init(void)
-{
-    app_t* con = appget("uart_serial");
-    if (con) {
-        appopen(con);
-        appcmd(con, "open");   /* 打开默认通道 (KSCconfig __UART_DEFAULT_CHANNEL__) */
-        ksc_console = con;
-    }
-    app_t* term = appget("terminal");
-    if (term) {
-        appopen(term);
-        ksc_term = term;
-    }
-}
-
-void KSCOSSystemClock_Init(unsigned char clock_type) { (void)clock_type; }
-void KSCOS_Error_Handler(void) { while (1); }
-
-#else
-#error "KSCOS: No platform selected. Define __USE_STM32__, __USE_PC__, or __USE_ESP32__ as 1."
-#endif
-
-#if __USE_PC__ || __USE_STM32__
-
 int __io_putchar(int ch)
 {
     if (ksc_console && ksc_console->app_data) {
@@ -189,4 +114,26 @@ int kscterminal(void)
         r1 = appwrite(ksc_term, &c, 1, 0);
     return r1;
 }
-#endif
+
+/* ================================================================
+ * 引导: 激活系统 app + 控制台/终端
+ * ================================================================ */
+void sys_init(void)
+{
+    appget("system");        /* system app 自动 open (芯片初始化) */
+
+    app_t* uart = appget("uart_serial");
+    if (uart) {
+        appopen(uart);
+        appcmd(uart, "open");   /* 打开默认通道 */
+    }
+    ksc_console = uart;
+
+    app_t* term = appget("terminal");
+    if (term) {
+        appopen(term);
+        ksc_term = term;
+    }
+}
+
+

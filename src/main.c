@@ -7,11 +7,7 @@ int main(void)
 
     kscprintf("=== KSCOS start ===\r\n");
     kscprintf("hello world\r\n");
-    // app_t* gpio = appget("gpio_port");
-    // if (gpio) {
-    //     appopen(gpio);
-    //     appcmd(gpio, "cfg -p 44 -m 3");
-    // }
+    
 
     app_t* term = appget("terminal");
     if (term) appopen(term);

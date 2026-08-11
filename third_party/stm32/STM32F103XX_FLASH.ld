@@ -226,8 +226,7 @@ SECTIONS
      /* This is used by the startup in order to initialize the .bss secion */
     _sbss = .;         /* define a global symbol at bss start */
     __bss_start__ = _sbss;
-    *(.tbss .tbss.*)
-    . = ALIGN(4);
+    *(.tbss .tbss.*)    . = ALIGN(4);
     PROVIDE( __tbss_end = . );
   } >RAM
 
@@ -258,6 +257,14 @@ SECTIONS
   PROVIDE( __non_tls_bss_start = ADDR(.bss) );
   PROVIDE( __bss_start = __tbss_start );
   PROVIDE( __bss_size = __bss_end - __bss_start );
+
+  /* System app 固定区 (SYSTEMAPP) — 独占 RAM 区, 运行时不变 */
+  .system_zone (NOLOAD) : ALIGN(8)
+  {
+    __system_zone_start = .;
+    KEEP(*(system_zone))
+    __system_zone_end = .;
+  } >RAM
 
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :

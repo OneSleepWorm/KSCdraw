@@ -17,10 +17,7 @@ extern "C" {
 extern volatile uint32_t KSCOSsystem_Clock;
 extern app_t* ksc_console;
 extern app_t* ksc_term;
-
-#if __USE_STM32__
-extern volatile uint32_t sys_tick_ms;
-#endif
+extern volatile uint32_t sys_tick_ms;   /* STM32: SysTick 递增; PC: 未用 */
 
 void kscprintf(const char* fmt, ...);
 void kscread(void* data);
