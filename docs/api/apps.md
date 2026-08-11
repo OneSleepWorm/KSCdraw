@@ -15,21 +15,57 @@
 
 | 注册名 | app_dep | 平台 | 源文件 | 主要接口 |
 |--------|---------|------|--------|---------|
-| `gpio_port` | — | STM32 | `gpio_port.c` | `appwrite` / `appread` + `appcmd(cfg/set/tog/rd)` |
-| `uart_serial` | `gpio_port` | STM32 | `uart_serial.c` | `appwrite`(TX) + `appread`(RX) + callback |
-| `tim_clock` | — | STM32 | `tim_clock.c` | `appwrite` + `appcmd(regcb/period/start/stop/rd)` |
-| `button16` | `gpio_port` | STM32 | `button16.c` | `appwrite`(init/start) + `appread`(raw/event) |
-| `super_spi` | `gpio_port` | STM32 | `super_spi.c` | `appcmd(reg/setpin)` + `appwrite(SSPI_MODE)` |
-| `KSCGUI` | `super_spi` | STM32 | `kscgui.c` | `appcmd`(~30 个命令) |
-| `list` | `KSCGUI` | STM32 | `list.c` | `appcmd`(init/add/select/...) + `appread` |
-| `ctrl_list` | `list` + `button16` | STM32 | `ctrl_list.c` | `appcmd(init/bind/start)` + callback |
-| `snake` | `KSCGUI` + `button16` | STM32 | `snake.c` | `appcmd(init)` |
-| `w25qxx_base` | `super_spi` | STM32 | `w25qxx_base.c` | `appcmd(id/read/write/erase/ce)` + `user_data` |
-| `littlefs` | `w25qxx_base` | STM32 | `littlefs_fs.c` | `appcmd(format/mount/writenew/open/...)` |
-| `terminal` | — | STM32 | `terminal.c` | `appwrite`(raw 行流) |
-| `open` | `littlefs` | STM32 | `open.c` | `appcmd` 转发到 littlefs/gpi_port |
+| `system` | — | 双端 | `bsp/{stm32,pc}/system.c` | 固定地址内核服务; `appcmd(time/delay/idle/mem)` |
+| `gpio_port` | — | STM32 | `bsp/stm32/gpio_port.c` | `appwrite` / `appread` + `appcmd(cfg/set/tog/rd)` |
+| `uart_serial` | `gpio_port` | 双端 | `bsp/{stm32,pc}/uart_serial.c` | `appwrite`(TX) + `appread`(RX) + callback |
+| `tim_clock` | — | 双端 | `bsp/{stm32,pc}/tim_clock.c` | `appwrite` + `appcmd(regcb/period/start/stop/rd)` |
+| `button16` | `gpio_port` | 双端 | `bsp/{stm32,pc}/button16.c` | `appwrite`(init/start) + `appread`(raw/event) |
+| `super_spi` | `gpio_port` | STM32 | `bsp/stm32/super_spi.c` | `appcmd(reg/setpin)` + `appwrite(SSPI_MODE)` |
+| `KSCGUI` | `super_spi` | 双端 | `apps/kscgui.c` + `bsp/{stm32,pc}/gui_drv.c` | `appcmd`(~30 个命令) |
+| `list` | `KSCGUI` | 双端 | `apps/list.c` | `appcmd`(init/add/select/...) + `appread` |
+| `ctrl_list` | `list` + `button16` | STM32 | `apps/ctrl_list.c` | `appcmd(init/bind/start)` + callback |
+| `snake` | `KSCGUI` + `button16` | 双端 | `apps/snake.c` | `appcmd(init)` |
+| `w25qxx_base` | `super_spi` | 双端 | `bsp/{stm32,pc}/w25qxx_base.c` | `appcmd(id/read/write/erase/ce)` + `user_data` |
+| `littlefs` | `w25qxx_base` | 双端 | `apps/littlefs_fs.c` | `appcmd(format/mount/writenew/open/...)` |
+| `terminal` | — | 双端 | `apps/terminal.c` | `appwrite`(raw 行流) |
+| `open` | `littlefs` | 双端 | `apps/open.c` | `appcmd` 转发到 littlefs/gpi_port |
 
 > snake 还隐式依赖 `tim_clock`，由 `appget` 在内部抓取：(见 `snake.c`)。ctrl_list 同样。
+
+---
+
+## system
+
+> 固定地址内核服务 app（内核服务即 app）。无平台差异的公开接口见 [`system.md`](system.md)。
+> 注册：`bsp/{stm32,pc}/system.c`，`REGISTER_APP("system", "0", &system_ops, ...)`。
+
+### appcmd 命令表
+
+| 命令 | 参数 | 返回值 | 说明 |
+|------|------|--------|------|
+| `time` | — | 1 | 输出当前 ms tick 到 `output_data` (uint32) |
+| `delay` | `-t <ms>` | 1 | 阻塞延时 |
+| `idle` | — | 1 | 空闲等待 (STM32: WFI; PC: Sleep(1)) |
+| `mem` | — | 1 | 输出内存池统计到 `output_fn` (各档 used/peak/alloc/free/fail) |
+
+> `malloc` / `free` 命令为保留命令名，实际分配走 `appwrite(SYSTEMAPP, &ptr, size, 0/1)` 二进制接口（快、无字符串解析）。
+
+### appread / appwrite mode 表
+
+| mode | 方向 | 说明 |
+|------|------|------|
+| `read mode 0` | 读 | `data` 出 `uint32` tick (等效 `sysgettime`) |
+| `read mode 1` | 读 | `data` 出 `uint32` 系统时钟频率 |
+| `write mode 0` | 写 | malloc: `data=&void*`，`count=size`，成功写回地址 |
+| `write mode 1` | 写 | free: `data=&void*`，释放 `*data` |
+| `write mode 2` | 写 | delay: `data=&uint32 ms` (等效 `sysdelay`) |
+| `write mode 3` | 写 | idle (等效 `oswait_idle`) |
+
+### 特殊约束
+
+- **禁止 `appclose`**：`appclose(SYSTEMAPP)` 返回 -1。
+- **`appopen` 幂等**：system 已在 `appget` 时自动 open，重复 open 返回 0。
+- **固定地址**：不参与 osmalloc，地址由 `.system_zone` 段（STM32）/ 静态数组（PC）固定。
 
 ---
 
@@ -794,7 +830,7 @@ appcmd(open_app, "file -p /photo.bmp");            /* → GUI drawbmp */
 
 ## 替换 / 增删 App 即完成程序构建
 
-KSCOS 的设计准则是：**框架核心 (`inc/app.h` + `src/app.c` + `src/KSCOSsystem.c` + `src/KSCdraw.c`) 不绑定任何具体外设 / 库 / 平台**。本文件列出的 13 个 App 都只是一份参考实现——上表所列 `app_dep` 仅表示"它们彼此之间的依赖关系"，运行时一切通过 `app_dep_str` 间接 `appget`。
+KSCOS 的设计准则是：**框架核心 (`inc/app.h` + `src/app.c` + `src/KSCOSsystem.c` + `src/KSCdraw.c`) 不绑定任何具体外设 / 库 / 平台**。本文件列出的 14 个 App（含内核 `system` app）都只是一份参考实现——上表所列 `app_dep` 仅表示"它们彼此之间的依赖关系"，运行时一切通过 `app_dep_str` 间接 `appget`。
 
 ### 替换某个内置 App
 

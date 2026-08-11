@@ -17,6 +17,8 @@ KSCOS/
 ├── inc/                # 公共头文件
 │   ├── app.h            # App 框架 (papp_t / app_t / REGISTER_APP / appcmd)
 │   ├── KSCOSsystem.h    # 系统服务 (sys_init / osmalloc / kscprintf / ksc_console)
+│   ├── kscsystem.h      # system app 内核接口 (SYSTEMAPP / 命令常量)
+│   ├── mempool.h        # 多档块池接口 + 统计结构
 │   ├── KSCdraw.h        # 图形引擎 (k_draw_device / KSC_window / ksc_obj_t)
 │   ├── KSCconfig.h      # 平台开关 + 颜色宏 + 屏幕配置
 │   ├── KSCfont.h        # 字体数据接口
@@ -25,25 +27,24 @@ KSCOS/
 ├── src/                # 框架核心实现
 │   ├── main.c           # 统一主函数入口 (PC / STM32)
 │   ├── app.c            # app系列函数
-│   ├── KSCOSsystem.c    # PLL / SysTick / osmalloc / kscprintf / sys_init
+│   ├── KSCOSsystem.c    # 系统服务转发 (osmalloc→system) + kscprintf + sys_init
 │   ├── KSCdraw.c        # k_draw_device + 对象 draw_table + 基本绘图
 │   ├── KSCfont.c
 │   └── KSCimg.c
-├── apps/               # 应用模块 (每个 .c 一个 REGISTER_APP)
+├── apps/               # 应用模块 (平台无关, 每个 .c 一个 REGISTER_APP)
 │   ├── app_config.h     # 跨 App 共享类型 
-│   ├── gpio_port.c      # GPIO 直操寄存器
-│   ├── uart_serial.c    # USART1/2/3
-│   ├── tim_clock.c      # TIM1-4
-│   ├── button16.c       # 4×4 矩阵键盘
-│   ├── super_spi.c      # 统一 SPI1+SPI2 主控
 │   ├── kscgui.c         # GUI 组件库
 │   ├── list.c           # GUI 列表 widget (含内置键盘控制)
 │   ├── snake.c          # Snake 游戏 (中断驱动)
-│   ├── w25qxx_base.c    # W25Q64 SPI NOR Flash
 │   ├── littlefs_fs.c    # littlefs on W25Q64
 │   ├── terminal.c       # 字符串路由分发器
 │   ├── open.c           # 按扩展名路由文件打开 (txt,bmp)
 │   └── transfer.c       # XMODEM-128 文件上传
+├── bsp/                # 平台实现 (REGISTER_APP + 驱动, 按平台条件编译)
+│   ├── share/src/       # 跨平台共享实现
+│   │   └── mempool.c    # 多档块池 (内核内存服务)
+│   ├── stm32/           # STM32: gpio/uart/super_spi/w25qxx/tim/button16/gui_drv/system
+│   └── pc/              # PC:   uart/w25qxx/tim/button16/gui_drv/system
 ├── cmake/
 │   └── gcc-arm-none-eabi.cmake   # arm-none-eabi 工具链配置
 ├── third_party/
