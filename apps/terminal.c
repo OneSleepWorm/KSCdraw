@@ -1,5 +1,6 @@
 #include "../inc/app.h"
 #include "../inc/KSCOSsystem.h"
+#include "../inc/kscsystem.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -111,7 +112,7 @@ static int term_open(app_t* app)
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(term_ctx_t));
     ctx->line_end = ctx->line_buf;
-    ctx->console = ksc_console;
+    ctx->console = CONSOLEAPP;
     app->app_data = ctx;
     return 0;
 }
