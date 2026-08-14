@@ -97,6 +97,17 @@ static void pc_uart_default_path(char* out, size_t sz, int inst, const char* bas
     strcat(out, ".txt");
 }
 
+/* 确保 .data 目录存在 (与 bsp/pc/w25qxx_base.c 的 pc_flash_mkdir 保持一致)。
+ * fopen/freopen 不会自动创建不存在的父目录; 干净环境(新克隆/CI)下 .data 不存在,
+ * 若不先建目录, stdinN.txt/stdoutN.txt 打开会静默失败, 通信链断裂。 */
+static void pc_uart_mkdir(const char* path)
+{
+    char dir[MAX_PATH];
+    strcpy(dir, path);
+    char* sep = strrchr(dir, '\\');
+    if (sep) { *sep = '\0'; CreateDirectoryA(dir, NULL); }
+}
+
 /* drain stdinN.txt into rx ring buffer (STM32 ISR semantics), then truncate */
 static void pc_uart_drain_stdin(pc_uart_port_t* p)
 {
@@ -139,6 +150,8 @@ static int port_open(pc_uart_ctx_t* ctx, int inst)
 
     pc_uart_default_path(p->stdin_path, sizeof(p->stdin_path), inst, "stdin");
     pc_uart_default_path(p->stdout_path, sizeof(p->stdout_path), inst, "stdout");
+
+    pc_uart_mkdir(p->stdin_path);   /* 确保 .data 目录存在 */
 
     p->stdin_fp = fopen(p->stdin_path, "r+b");
     if (!p->stdin_fp) p->stdin_fp = fopen(p->stdin_path, "w+b");
