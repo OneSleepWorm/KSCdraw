@@ -3,6 +3,7 @@
 
 int main(void)
 {
+    appget("system");
     sys_init();
 
     kscprintf("=== KSCOS start ===\r\n");

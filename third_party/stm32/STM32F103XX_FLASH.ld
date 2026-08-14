@@ -266,6 +266,16 @@ SECTIONS
     __system_zone_end = .;
   } >RAM
 
+  /* app 系列函数入口 — 固定可链接符号名, 供外部链接/查询 */
+  appget_entry      = appget;
+  appopen_entry     = appopen;
+  appclose_entry    = appclose;
+  appread_entry     = appread;
+  appwrite_entry    = appwrite;
+  appcmd_entry      = appcmd;
+  appcmd_argv_entry = appcmd_argv;
+  appfree_entry     = appfree;
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :
   {

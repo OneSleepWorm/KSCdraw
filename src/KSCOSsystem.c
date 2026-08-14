@@ -6,35 +6,12 @@
 #include <stdarg.h>
 
 /* ================================================================
- * 共享实现 (所有平台) — 系统服务经 system app 分发
+ * 共享实现 (所有平台)
+ *
+ * 说明: osmalloc/osfree/oscalloc/sysdelay/sysgettime/oswait_idle 已
+ * 迁至 bsp/share/include/fastsystem.h (纯 static inline 宏封装,
+ * 内部走 SYSTEMAPP 句柄 + appwrite/appread), 此处不再定义全局函数。
  * ================================================================ */
-
-/* ================================================================
- * 内存服务 — 经 system app 分发 (mempool)
- * ================================================================ */
-
-void* osmalloc(size_t size)
-{
-    void* p = NULL;
-    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
-        appwrite(SYSTEMAPP, &p, (uint32_t)size, 0);   /* mode=0: malloc */
-    return p;
-}
-
-void osfree(void* ptr)
-{
-    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
-        appwrite(SYSTEMAPP, &ptr, sizeof(ptr), 1);    /* mode=1: free */
-}
-
-void* oscalloc(size_t num, size_t size)
-{
-    void* p = osmalloc(num * size);
-    if (p) memset(p, 0, num * size);
-    return p;
-}
-
-void osdelay(uint32_t ms) { sysdelay(ms); }
 
 ki8 KSCOS_default_Error_Handler(void* data)
 {
@@ -49,30 +26,6 @@ ki8 KSCOS_default_Error_Handler(void* data)
 app_t* ksc_console = NULL;
 app_t* ksc_term = NULL;
 volatile uint32_t KSCOSsystem_Clock = 0;
-
-/* ================================================================
- * 系统服务 — 经 system app 二进制接口分发 (快, 无字符串解析)
- * ================================================================ */
-
-void sysdelay(uint32_t ms)
-{
-    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
-        appwrite(SYSTEMAPP, &ms, sizeof(ms), 2);   /* mode=2: delay */
-}
-
-uint32_t sysgettime(void)
-{
-    uint32_t t = 0;
-    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->read)
-        appread(SYSTEMAPP, &t, sizeof(t), 0);      /* mode=0: gettime */
-    return t;
-}
-
-void oswait_idle(void)
-{
-    if (SYSTEMAPP && SYSTEMAPP->app_ops && SYSTEMAPP->app_ops->write)
-        appwrite(SYSTEMAPP, NULL, 0, 3);           /* mode=3: idle */
-}
 
 void KSCOS_Error_Handler(void)
 {
@@ -120,8 +73,6 @@ int kscterminal(void)
  * ================================================================ */
 void sys_init(void)
 {
-    appget("system");        /* system app 自动 open (芯片初始化) */
-
     app_t* uart = appget("uart_serial");
     if (uart) {
         appopen(uart);
