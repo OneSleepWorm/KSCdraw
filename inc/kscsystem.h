@@ -50,4 +50,27 @@ void system_platform_init(ksc_system_data_t* data);   /* 芯片时钟/外设初�
 /* 固定区定义 (bsp/<平台>/system_zone.c 实现) */
 void* system_zone_get(void);          /* 返回固定区基址 (app_t*) */
 
+/* ================================================================
+ * KSCOS 控制台 app (console) — 固定地址全局加载路由
+ *
+ * console 是与 system 同待遇的固定地址 app: 全局加载路由, 承载
+ * printf 输出 / 终端 IO 等调试接口。它不是 uart, 而是通过标准
+ * app_dep 机制依赖 uart_serial (app0), 像普通 app 一样路由到 uart。
+ *
+ * kscprintf/kscterminal 经 CONSOLEAPP 固定句柄访问, 不再依赖运行时
+ * ksc_console 全局变量。
+ * ================================================================ */
+extern app_t* ksc_console_app;   /* 指向 console app (固定地址) */
+#define CONSOLEAPP (ksc_console_app)
+
+/* console app 生命周期 (bsp/<平台>/console.c 实现, REGISTER_APP("console")) */
+int  console_app_open(app_t* app);
+int  console_app_close(app_t* app);
+int  console_app_read(app_t* app, void* data, uint32_t count, uint32_t mode);
+int  console_app_write(app_t* app, void* data, uint32_t count, uint32_t mode);
+int  console_app_cmd(app_t* app, const char* cmdname, const char** argv);
+
+/* 固定区定义 (bsp/<平台>/console_zone.c 实现) */
+void* console_zone_get(void);      /* 返回 console 固定区基址 */
+
 #endif /* KSC_SYSTEM_H */

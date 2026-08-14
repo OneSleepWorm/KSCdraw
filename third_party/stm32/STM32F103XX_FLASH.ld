@@ -266,6 +266,14 @@ SECTIONS
     __system_zone_end = .;
   } >RAM
 
+  /* Console app 固定区 (CONSOLEAPP) — 独占 RAM 区, 运行时不变 */
+  .console_zone (NOLOAD) : ALIGN(8)
+  {
+    __console_zone_start = .;
+    KEEP(*(console_zone))
+    __console_zone_end = .;
+  } >RAM
+
   /* app 系列函数入口 — 固定可链接符号名, 供外部链接/查询 */
   appget_entry      = appget;
   appopen_entry     = appopen;

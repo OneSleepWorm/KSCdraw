@@ -8,9 +8,12 @@
 /* ================================================================
  * 共享实现 (所有平台)
  *
- * 说明: osmalloc/osfree/oscalloc/sysdelay/sysgettime/oswait_idle 已
- * 迁至 bsp/share/include/fastsystem.h (纯 static inline 宏封装,
- * 内部走 SYSTEMAPP 句柄 + appwrite/appread), 此处不再定义全局函数。
+ * 说明:
+ *  - osmalloc/osfree/oscalloc/sysdelay/sysgettime/oswait_idle 已迁至
+ *    bsp/share/include/fastsystem.h (纯 static inline 宏封装, 内部走
+ *    SYSTEMAPP 句柄 + appwrite/appread), 此处不再定义全局函数。
+ *  - kscprintf/kscterminal 经 CONSOLEAPP 固定句柄访问, 不再依赖运行时
+ *    ksc_console/ksc_term 全局变量。
  * ================================================================ */
 
 ki8 KSCOS_default_Error_Handler(void* data)
@@ -23,8 +26,6 @@ ki8 KSCOS_default_Error_Handler(void* data)
 /* ================================================================
  * 全局 (共享定义)
  * ================================================================ */
-app_t* ksc_console = NULL;
-app_t* ksc_term = NULL;
 volatile uint32_t KSCOSsystem_Clock = 0;
 
 void KSCOS_Error_Handler(void)
@@ -33,20 +34,20 @@ void KSCOS_Error_Handler(void)
 }
 
 /* ================================================================
- * 控制台输出 (共享, 经 ksc_console 转发)
+ * 控制台输出 (共享, 经 CONSOLEAPP 固定句柄)
  * ================================================================ */
 int __io_putchar(int ch)
 {
-    if (ksc_console && ksc_console->app_data) {
+    if (CONSOLEAPP && CONSOLEAPP->app_ops) {
         char c = (char)ch;
-        appwrite(ksc_console, &c, 1, 0);
+        appwrite(CONSOLEAPP, &c, 1, 0);
     }
     return ch;
 }
 
 void kscprintf(const char* fmt, ...)
 {
-    if (!ksc_console) return;
+    if (!CONSOLEAPP) return;
     va_list ap;
     va_start(ap, fmt);
     char buf[128];
@@ -54,37 +55,41 @@ void kscprintf(const char* fmt, ...)
     va_end(ap);
     if (n > 0) {
         size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        appwrite(ksc_console, buf, len, 0);
+        appwrite(CONSOLEAPP, buf, len, 0);
     }
 }
 
 int kscterminal(void)
 {
-    if (!ksc_term) return -1;
+    app_t* term = appget("terminal");
+    if (!term || !CONSOLEAPP) return -1;
     uint8_t c;
     uint8_t r1;
-    while (appread(ksc_console, &c, 1, 0) > 0)
-        r1 = appwrite(ksc_term, &c, 1, 0);
+    while (appread(CONSOLEAPP, &c, 1, 0) > 0)
+        r1 = appwrite(term, &c, 1, 0);
     return r1;
 }
 
 /* ================================================================
- * 引导: 激活系统 app + 控制台/终端
+ * 引导: 激活固定 app + 控制台/终端
+ * 起手招 (appget system/console) 由 main.c 显式调用, 此处只做依赖装配。
  * ================================================================ */
 void sys_init(void)
 {
+    /* uart 通道初始化 (console 的路由目标, 引导层显式打开) */
     app_t* uart = appget("uart_serial");
     if (uart) {
         appopen(uart);
         appcmd(uart, "open");   /* 打开默认通道 */
     }
-    ksc_console = uart;
+
+    app_t* console = appget("console");
+    if (console)
+        appopen(console);
 
     app_t* term = appget("terminal");
-    if (term) {
+    if (term)
         appopen(term);
-        ksc_term = term;
-    }
 }
 
 

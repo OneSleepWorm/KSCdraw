@@ -16,8 +16,8 @@ KSCOS 是一个跨平台、轻量级、**非 RTOS 式**的应用框架，面向 
 KSCOS/
 ├── inc/                # 公共头文件
 │   ├── app.h            # App 框架 (papp_t / app_t / REGISTER_APP / appcmd)
-│   ├── KSCOSsystem.h    # 系统服务 (sys_init / osmalloc / kscprintf / ksc_console)
-│   ├── kscsystem.h      # system app 内核接口 (SYSTEMAPP / 命令常量)
+│   ├── KSCOSsystem.h    # 系统服务 (sys_init / kscprintf / ksc_terminal)
+│   ├── kscsystem.h      # 固定 app 内核接口 (SYSTEMAPP / CONSOLEAPP / 命令常量)
 │   ├── mempool.h        # 多档块池接口 + 统计结构
 │   ├── KSCdraw.h        # 图形引擎 (k_draw_device / KSC_window / ksc_obj_t)
 │   ├── KSCconfig.h      # 平台开关 + 颜色宏 + 屏幕配置
@@ -27,7 +27,7 @@ KSCOS/
 ├── src/                # 框架核心实现
 │   ├── main.c           # 统一主函数入口 (PC / STM32)
 │   ├── app.c            # app系列函数
-│   ├── KSCOSsystem.c    # 系统服务转发 (osmalloc→system) + kscprintf + sys_init
+│   ├── KSCOSsystem.c    # 共享层 (kscprintf/kscterminal/sys_init + 全局定义)
 │   ├── KSCdraw.c        # k_draw_device + 对象 draw_table + 基本绘图
 │   ├── KSCfont.c
 │   └── KSCimg.c
@@ -41,10 +41,11 @@ KSCOS/
 │   ├── open.c           # 按扩展名路由文件打开 (txt,bmp)
 │   └── transfer.c       # XMODEM-128 文件上传
 ├── bsp/                # 平台实现 (REGISTER_APP + 驱动, 按平台条件编译)
-│   ├── share/src/       # 跨平台共享实现
-│   │   └── mempool.c    # 多档块池 (内核内存服务)
-│   ├── stm32/           # STM32: gpio/uart/super_spi/w25qxx/tim/button16/gui_drv/system
-│   └── pc/              # PC:   uart/w25qxx/tim/button16/gui_drv/system
+│   ├── share/           # 跨平台共享实现
+│   │   ├── src/         #   mempool.c (多档块池) / console.c (固定路由 app)
+│   │   └── include/     #   fastsystem.h (os*/sys* 内联封装宏)
+│   ├── stm32/           # STM32: gpio/uart/super_spi/w25qxx/tim/button16/gui_drv/system/console
+│   └── pc/              # PC:   uart/w25qxx/tim/button16/gui_drv/system/console
 ├── cmake/
 │   └── gcc-arm-none-eabi.cmake   # arm-none-eabi 工具链配置
 ├── third_party/
@@ -296,29 +297,32 @@ mode = (inst << 4) | op
 ### Hello-World 示例
 
 ```c
+    appget("system");      /* 固定起手招: 内核服务 */
+    appget("console");     /* 固定起手招: printf/终端 */
     sys_init();
     app_t* term = appget("terminal");
     if (term) appopen(term);
  while (1) {
      uint8_t c;
-     while (appread(ksc_console, &c, 1, 1) > 0)
+     while (appread(CONSOLEAPP, &c, 1, 1) > 0)
         appwrite(term, &c, 1, 0);
      }
 ```
 
 ---
 
-## 系统服务 (`inc/KSCOSsystem.h` → `src/KSCOSsystem.c`)
+## 系统服务 (`inc/KSCOSsystem.h` + `inc/kscsystem.h`)
 
 | API | 说明 |
 |-----|------|
-| `sys_init()` | STM32: 使能 AFIO+SWJ 重映射 → `pll_init()` (HSE×9=72MHz) → `SysTick_Config` → `appget("uart_serial")` + `appopen` + `appcmd "open -i 1"` → 设 `ksc_console`。PC: 同流程 (`appget("uart_serial")` → `appopen` → `appcmd "open -i 1"`), `ksc_console` 指向 uart_serial stdout |
-| `sysdelay(ms)` | 基于 `sys_tick_ms` 阻塞延时 |
-| `sysgettime()` | 返回 `sys_tick_ms` (开机毫秒计数) |
-| `osmalloc(size)` / `osfree(p)` / `oscalloc(n,sz)` | 框架内统一堆接口, STM32 上为 libc `malloc/calloc/free` |
-| `kscprintf(fmt, ...)` | 通过 `ksc_console` 输出格式化串 (含 `vsnprintf`, buffer 128B) |
+| `SYSTEMAPP` / `CONSOLEAPP` | 固定地址 app 句柄 (libc/stdio), `appget("system")` / `appget("console")` 自动 open |
+| `sys_init()` | 引导装配: `appget("uart_serial")`+open+`appcmd "open"` → `appget("console")`+open → `appget("terminal")`+open |
+| `sysdelay(ms)` / `sysgettime()` | 经 SYSTEMAPP 分发的时间服务 (fastsystem.h 宏) |
+| `os_malloc(size)` / `os_free(p)` / `os_calloc(n,sz)` | fastsystem.h 内联宏, 经 SYSTEMAPP → mempool (旧名 `osmalloc` 等兼容) |
+| `kscprintf(fmt, ...)` | 经 CONSOLEAPP 输出格式化串 (含 `vsnprintf`, buffer 128B) |
+| `kscterminal()` | 经 CONSOLEAPP 读输入 → terminal app 路由 |
 
-| `ksc_console` | 全局 `app_t*`, 由 sys_init 指向 `uart_serial` 实例 1 |
+> 全局 `ksc_console` / `ksc_term` 变量已废除，由固定地址 `CONSOLEAPP` 取代。正式接口只有：app 系列函数 + SYSTEMAPP + CONSOLEAPP。
 
 ### 强制规则: 所有运行期上下文必须 osmalloc
 
