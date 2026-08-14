@@ -16,6 +16,7 @@
 | 注册名 | app_dep | 平台 | 源文件 | 主要接口 |
 |--------|---------|------|--------|---------|
 | `system` | — | 双端 | `bsp/{stm32,pc}/system.c` | 固定地址内核服务; `appcmd(time/delay/idle/mem)` |
+| `console` | `uart_serial` | 双端 | `bsp/share/src/console.c` | 固定地址全局加载路由; `appwrite`(输出) + `appread`(输入) |
 | `gpio_port` | — | STM32 | `bsp/stm32/gpio_port.c` | `appwrite` / `appread` + `appcmd(cfg/set/tog/rd)` |
 | `uart_serial` | `gpio_port` | 双端 | `bsp/{stm32,pc}/uart_serial.c` | `appwrite`(TX) + `appread`(RX) + callback |
 | `tim_clock` | — | 双端 | `bsp/{stm32,pc}/tim_clock.c` | `appwrite` + `appcmd(regcb/period/start/stop/rd)` |
@@ -66,6 +67,27 @@
 - **禁止 `appclose`**：`appclose(SYSTEMAPP)` 返回 -1。
 - **`appopen` 幂等**：system 已在 `appget` 时自动 open，重复 open 返回 0。
 - **固定地址**：不参与 osmalloc，地址由 `.system_zone` 段（STM32）/ 静态数组（PC）固定。
+
+---
+
+## console
+
+> 固定地址全局加载路由 app（stdio）。与 `system` 同待遇：`.console_zone` 段固定地址、`appget("console")` 自动 open、`appclose` 拒绝。
+> 不是 uart——通过标准 `app_dep` 依赖 `uart_serial`（app0），`write`/`read` 直接路由到 uart。`kscprintf`/`kscterminal` 经 `CONSOLEAPP` 固定句柄访问。
+> 注册：`bsp/share/src/console.c`，`REGISTER_APP_EX("console", "0", "1\0uart_serial", &console_ops, ...)`。
+
+### appread / appwrite mode 表
+
+| mode | 方向 | 说明 |
+|------|------|------|
+| `write mode 0` | 写 | 输出 `count` 字节到 uart (路由 app0) |
+| `read mode 0` | 读 | 从 uart 读 `count` 字节 |
+
+### 特殊约束
+
+- **禁止 `appclose`**：`appclose(CONSOLEAPP)` 返回 -1。
+- **`appopen` 幂等**：console 已在 `appget` 时自动 open。
+- **固定地址**：`.console_zone` 段（STM32）/ 静态数组（PC）。
 
 ---
 
@@ -745,7 +767,7 @@ appopen(term);
 
 while (1) {
     uint8_t c;
-    if (appread(ksc_console, &c, 1, 1) > 0)
+    if (appread(CONSOLEAPP, &c, 1, 1) > 0)
         appwrite(term, &c, 1, 0);     /* raw byte, 攒行 */
 }
 ```

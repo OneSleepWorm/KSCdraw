@@ -12,7 +12,7 @@
 |------|------|-----------|
 | [`app_framework.md`](app_framework.md) | `papp_t` / `app_t` 数据结构、`REGISTER_APP` 宏、`appget/appopen/appclose/appread/appwrite/appfree` 全套生命周期 API、单例缓存与引用计数语义 | `inc/app.h` |
 | [`appcmd.md`](appcmd.md) | `appcmd` 字符串命令接口规范：语法、引号转义、26 槽位、宏 `APPCMD_HAS/APPCMD_ARG`、数据通道 (`user_data`/`output_fn`/`callback_data`)、返回值约定、mode 字节编码 | `inc/app.h` (运行期由 `src/app.c` 实现) |
-| [`system.md`](system.md) | `sys_init` / `sysdelay` / `sysgettime` / `osmalloc` / `kscprintf` / `ksc_console` / **system app (固定地址内核服务)** / **内存池统计** / 错误处理器 — 以及"1KB 栈"约束 | `inc/KSCOSsystem.h` + `inc/kscsystem.h` + `inc/mempool.h` |
+| [`system.md`](system.md) | `sys_init` / `kscprintf` / **固定地址 app (SYSTEMAPP 内核服务 + CONSOLEAPP 全局路由)** / **内存池统计** / **fastsystem.h 内联宏** / 错误处理器 — 以及"1KB 栈"约束 | `inc/KSCOSsystem.h` + `inc/kscsystem.h` + `inc/mempool.h` |
 | [`kscdraw.md`](kscdraw.md) | `k_draw_device` 抽象、`KSC_window`、`ksc_obj_t` + 扩展 `draw_table`、全部基本绘图函数、颜色常量 | `inc/KSCdraw.h` |
 | [`apps.md`](apps.md) | 各 App 的 appcmd 命令表与 `appread/appwrite` mode 表 (gpio_port / uart_serial / tim_clock / button16 / super_spi / KSCGUI / list / ctrl_list / snake / w25qxx_base / littlefs / terminal / open) | `apps/*.c` + `apps/app_config.h` |
 
