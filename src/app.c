@@ -78,12 +78,18 @@ app_t* appget(const char* name)
         if (!papp->base || strcmp(name, papp->base->app_name) != 0)
             continue;
 
-        /* system app: 固定地址, 不走 osmalloc。A4: 入缓存前直接 open */
-        int is_system = (strcmp(name, "system") == 0);
+        /* 固定地址 app (system/console): 不走 osmalloc。A4: 入缓存前直接 open */
+        int is_system  = (strcmp(name, "system") == 0);
+        int is_console = (strcmp(name, "console") == 0);
+        int is_fixed   = is_system || is_console;
 
         app_t* app;
         if (is_system) {
             app = SYSTEMAPP;
+            if (!app) return NULL;
+            memset(app, 0, sizeof(app_t));
+        } else if (is_console) {
+            app = CONSOLEAPP;
             if (!app) return NULL;
             memset(app, 0, sizeof(app_t));
         } else {
@@ -109,26 +115,26 @@ app_t* appget(const char* name)
             app_t* appslots[4] = {NULL, NULL, NULL, NULL};
             if (resolve_app_deps(papp->app_dep_str, appslots) < 0) {
                 if (appslots[0]) appfree(appslots[0]);
-                if (!is_system) osfree(app);
+                if (!is_fixed) osfree(app);
                 return NULL;
             }
             app->app0 = appslots[0]; app->app1 = appslots[1];
             app->app2 = appslots[2]; app->app3 = appslots[3];
         }
 
-        /* A4 补丁: system 在入缓存前直接 open (缓存节点未建, 不能走 appopen) */
-        if (is_system && papp->ops->open)
+        /* A4 补丁: 固定 app 在入缓存前直接 open (缓存节点未建, 不能走 appopen) */
+        if (is_fixed && papp->ops->open)
             papp->ops->open(app);
 
-        /* 3. 入缓存链表 (system 已 open, 其 malloc 分发可用) */
+        /* 3. 入缓存链表 (固定 app 已 open, 其 malloc 分发可用) */
         node = (app_cache_node_t*)osmalloc(sizeof(app_cache_node_t));
         if (!node) {
-            if (!is_system) osfree(app);
+            if (!is_fixed) osfree(app);
             return NULL;
         }
         node->app       = app;
         node->get_refs  = 1;
-        node->app_state = is_system ? APP_STATE_OPENED : 0;
+        node->app_state = is_fixed ? APP_STATE_OPENED : 0;
         node->next      = _app_cache;
         _app_cache      = node;
 
@@ -142,8 +148,8 @@ int appopen(app_t* app)
     if (!app) return -1;
     if (!app->app_ops || !app->app_ops->open) return -1;
 
-    /* system app: 已由 appget 自动 open (A4), 幂等返回 */
-    if (app == SYSTEMAPP)
+    /* 固定 app (system/console): 已由 appget 自动 open (A4), 幂等返回 */
+    if (app == SYSTEMAPP || app == CONSOLEAPP)
         return 0;
 
     app_cache_node_t* node = cache_find_by_app(app);
@@ -160,8 +166,8 @@ __attribute__((used, noipa)) int appclose(app_t* app)
 {
     if (!app) return -1;
 
-    /* system app 禁止关闭 */
-    if (app == SYSTEMAPP)
+    /* 固定 app (system/console) 禁止关闭 */
+    if (app == SYSTEMAPP || app == CONSOLEAPP)
         return -1;
 
     if (!app->app_ops || !app->app_ops->close) return -1;

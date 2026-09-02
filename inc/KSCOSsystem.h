@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "KSCconfig.h"
 #include "app.h"
+#include "kscsystem.h"
 #include <stdarg.h>
 #include "../bsp/share/include/fastsystem.h"
 
@@ -12,8 +13,6 @@ extern "C" {
 #endif
 
 extern volatile uint32_t KSCOSsystem_Clock;
-extern app_t* ksc_console;
-extern app_t* ksc_term;
 extern volatile uint32_t sys_tick_ms;   /* STM32: SysTick 递增; PC: 未用 */
 
 void kscprintf(const char* fmt, ...);
