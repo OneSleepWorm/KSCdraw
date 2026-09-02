@@ -17,6 +17,16 @@ if(STM32_FIRMWARE)
         ${CMAKE_CURRENT_SOURCE_DIR}/stm32/system.c
         ${CMAKE_CURRENT_SOURCE_DIR}/stm32/system_zone.c
     )
+elseif(LINUX_NATIVE)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/uart_serial.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/w25qxx_base.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/tim_clock.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/button16.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/gui_drv.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/system.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/linux/system_zone.c
+    )
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/pc/uart_serial.c

@@ -18,6 +18,26 @@
       }
     },
     {
+      "name": "Linux-Debug",
+      "displayName": "Linux Native Debug (SDL2)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-debug",
+      "cacheVariables": {
+        "LINUX_NATIVE": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Linux-Release",
+      "displayName": "Linux Native Release (SDL2)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-release",
+      "cacheVariables": {
+        "LINUX_NATIVE": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "Firmware-Debug",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/Debug",
@@ -39,6 +59,8 @@
     }
   ],
   "buildPresets": [
+    { "name": "Linux-Debug", "configurePreset": "Linux-Debug" },
+    { "name": "Linux-Release", "configurePreset": "Linux-Release" },
     { "name": "Firmware-Debug", "configurePreset": "Firmware-Debug" },
     { "name": "Firmware-Release", "configurePreset": "Firmware-Release" }
   ]

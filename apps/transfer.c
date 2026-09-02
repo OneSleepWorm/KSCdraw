@@ -74,8 +74,10 @@ static int transfer_cmd(app_t* app, const char* cmdname, const char** argv)
             return 0;
         }
 
-#if __USE_PC__
+#if __USE_PC__ && !__USE_LINUX__
         Sleep(1);
+#elif __USE_LINUX__
+        sysdelay(1);
 #endif
     }
 

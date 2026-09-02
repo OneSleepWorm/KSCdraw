@@ -2,9 +2,27 @@ cmake_minimum_required(VERSION 3.22)
 project(KSCOS)
 
 option(STM32_FIRMWARE "Build for STM32 target" OFF)
+option(LINUX_NATIVE  "Build for Linux native target (SDL2 + pthread)" OFF)
 
 # === 平台分支 ===
-if(STM32_FIRMWARE)
+if(LINUX_NATIVE)
+    enable_language(C)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED sdl2)
+    find_package(Threads REQUIRED)
+
+    add_executable(KSCOS src/main.c)
+
+    # __USE_PC__ 必须保持 1: apps/ 下 5 个 App 由 `#if __USE_STM32__ || __USE_PC__`
+    # 守卫, 置 0 会让 app_table 段为空。__USE_LINUX__ 只负责 BSP 分支与屏蔽 Win32 头。
+    target_compile_definitions(KSCOS PRIVATE
+        __USE_AUTO__=1 __USE_PC__=1 __USE_STM32__=0 __USE_LINUX__=1)
+
+    target_include_directories(KSCOS PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_compile_options(KSCOS PRIVATE -Wall)
+    target_link_libraries(KSCOS PRIVATE ${SDL2_LIBRARIES} Threads::Threads m)
+
+elseif(STM32_FIRMWARE)
     enable_language(C ASM)
 
     add_executable(KSCOS)
@@ -79,8 +97,8 @@ target_include_directories(KSCOS PRIVATE
     third_party/async_xmodem
 )
 
-# === PC 额外链接 ===
-if(NOT STM32_FIRMWARE)
+# === PC 额外链接 (Linux 分支已是自包含可执行文件, 无需附加库) ===
+if(NOT STM32_FIRMWARE AND NOT LINUX_NATIVE)
     target_link_libraries(KSCOS PRIVATE KSCOS_SRC easyx)
 endif()
 

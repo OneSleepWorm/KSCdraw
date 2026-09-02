@@ -44,7 +44,8 @@ KSCOS/
 │   ├── share/src/       # 跨平台共享实现
 │   │   └── mempool.c    # 多档块池 (内核内存服务)
 │   ├── stm32/           # STM32: gpio/uart/super_spi/w25qxx/tim/button16/gui_drv/system
-│   └── pc/              # PC:   uart/w25qxx/tim/button16/gui_drv/system
+│   ├── pc/              # PC:   uart/w25qxx/tim/button16/gui_drv/system (MinGW + easyx)
+│   └── linux/           # Linux: 同 PC 功能 (SDL2 GUI + pthread + 文件模拟, CMake LINUX_NATIVE=ON)
 ├── cmake/
 │   └── gcc-arm-none-eabi.cmake   # arm-none-eabi 工具链配置
 ├── third_party/
@@ -82,6 +83,10 @@ KSCOS/
 #define __USE_STM32__  1   /* 三选一: 1 = STM32 嵌入式目标 */
 #define __USE_ESP32__  0   /* 三选一: 1 = ESP32 目标 (暂未实现) */
 ```
+
+> **`__USE_LINUX__`** (Linux 原生目标, 由 `LINUX_NATIVE=ON` 注入) 与 `__USE_PC__=1` **同时生效**:
+> `__USE_PC__` 语义为"非嵌入式主机端" (决定 apps/ 是否参与编译), `__USE_LINUX__` 只负责
+> 选择 `bsp/linux/` 平台层并屏蔽 Win32 头 (`KSCconfig.h` 内已条件化)。
 
 | 开关 | 默认 | 作用 |
 |------|------|------|
@@ -137,12 +142,28 @@ cmake --preset "PC Debug" && cmake --build --preset "PC Debug"
 # 产物: build_debug/KSCOS.exe
 ```
 
+### Linux 原生构建
+
+依赖系统 gcc + SDL2 (`sudo apt install libsdl2-dev`) 与 Ninja。用于在 Linux 上运行完整框架
+(GUI / terminal / littlefs / snake 等全部 App), 产物路径解析: 优先 `KSCOS_DATA_DIR` 环境变量,
+否则从可执行文件位置自动回溯到 `KSCOS/.data/`。
+
+```sh
+cd KSCOS/
+
+cmake --preset Linux-Debug && cmake --build --preset Linux-Debug
+# 产物: build/linux-debug/KSCOS
+# GUI 窗口为 240x320 的 SCALE 倍 SDL2 窗口; 串口仍走 .data/stdinN.txt / stdoutN.txt
+```
+
 ### 预设一览
 
 | 预设 | 目标 | 生成器 | 工具链 |
 |------|------|--------|--------|
-| `PC Debug` | PC 调试 | MinGW Makefiles | gcc/g++ |
-| `PC Release` | PC 发布 | MinGW Makefiles | gcc/g++ |
+| `PC Debug` | PC 调试 | MinGW Makefiles | gcc/g++ (MinGW) |
+| `PC Release` | PC 发布 | MinGW Makefiles | gcc/g++ (MinGW) |
+| `Linux-Debug` | Linux 原生调试 | Ninja | 系统 gcc + SDL2 + pthread |
+| `Linux-Release` | Linux 原生发布 | Ninja | 系统 gcc + SDL2 + pthread |
 | `Firmware-Debug` | STM32 调试 ( -Os -g3 ) | Ninja | arm-none-eabi-gcc |
 | `Firmware-Release` | STM32 发布 ( -Os -g0 ) | Ninja | arm-none-eabi-gcc |
 ---
@@ -579,7 +600,8 @@ littlefs cat -p /test.txt
 
 | 组件 | 路径 | 取代的具体实现 | 可替换为 |
 |------|------|---------------|----------|
-| easyx | `third_party/easyx/` (libeasyx.a + graphics.h) | PC 平台 `k_draw_device` 屏呈现 | SDL2 / raylib / 自绘后端 |
+| easyx (仅 MinGW) | `third_party/easyx/` (libeasyx.a + graphics.h) | PC 平台 `k_draw_device` 屏呈现 | raylib / 自绘后端 |
+| SDL2 (系统包) | Linux: `libsdl2-dev` | Linux 平台 `k_draw_device` 屏呈现 (RGB565 帧缓冲批量 present) | raylib / 直写 framebuffer |
 | littlefs | `third_party/littlefs/` | `littlefs` App 的 FS 实现 | FatFS / 自实现 FS |
 | tjpgd3 | `third_party/tjpgd3/` | JPEG 解码支持 | stb_image / libjpeg-turbo |
 | STM32 CMSIS + 启动 | `third_party/stm32/` (CMSIS 头 + 启动汇编 + 链接脚本 + 系统源) | 寄存器宏定义、中断向量表、newlib 系统调用桩 | 完整 CubeMX HAL / LL 库 / 裸 CMSIS |

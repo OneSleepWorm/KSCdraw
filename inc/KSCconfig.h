@@ -7,7 +7,16 @@
 #define __USE_PC__ 0
 #define __USE_STM32__ 1
 #define __USE_ESP32__ 0
+#define __USE_LINUX__ 0
 
+#endif
+
+/* __USE_LINUX__ 默认由 CMake (-D__USE_LINUX__=1) 注入; 此处兜底, 保证未定义时为 0。
+ * 注意: Linux 目标同时置 __USE_PC__=1 (语义为"非嵌入式主机端"),
+ *       因为 apps/ 下 5 个 App 由 `#if __USE_STM32__ || __USE_PC__` 守卫,
+ *       置 0 会让 app_table 段为空。__USE_LINUX__ 只负责 BSP 分支与屏蔽 Win32 头。 */
+#ifndef __USE_LINUX__
+#define __USE_LINUX__ 0
 #endif
 //program config
 #define __USE_LCD__ 1
@@ -68,9 +77,11 @@ typedef int16_t ki16;
 #if __USE_PC__
 #include <stdlib.h>
 #include <stdio.h>
+#if !__USE_LINUX__
 #include <windows.h>
+#endif
 #define log(...) 0
-#define KSC_PC_SCALE 2   /* PC window zoom: 1, 2, or 3 */
+#define KSC_PC_SCALE 2   /* PC window zoom: 1, 2, or 3 (SDL/easyx 通用) */
 
 #endif
 
